@@ -80,3 +80,18 @@ END:VEVENT
 END:VCALENDAR
 """
     return Response(content=ics, media_type="text/calendar; charset=utf-8")
+@app.get("/test-create-token")
+def test_create_token():
+    token = secrets.token_urlsafe(16)
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO tokens (token) VALUES (%s)", (token,))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return {
+        "token": token,
+        "calendar_url": f"https://via-clara-kuurytmi6.onrender.com/calendar/{token}.ics"
+    }
