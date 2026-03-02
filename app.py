@@ -9,30 +9,39 @@ app = FastAPI(title="Via Clara Kuurytmi API")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+
 def get_connection():
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is not set")
     return psycopg2.connect(DATABASE_URL)
+
 
 def init_db():
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS tokens (
             id SERIAL PRIMARY KEY,
             token TEXT UNIQUE NOT NULL,
             active BOOLEAN DEFAULT TRUE
         );
-    """)
+        """
+    )
     conn.commit()
     cur.close()
     conn.close()
+
 
 @app.on_event("startup")
 def startup():
     init_db()
 
+
 @app.get("/health", response_class=PlainTextResponse)
 def health():
     return "ok"
+
 
 @app.post("/create-token")
 def create_token():
@@ -47,8 +56,27 @@ def create_token():
 
     return {
         "token": token,
-        "calendar_url": f"https://via-clara-kuurytmi6.onrender.com/calendar/{token}.ics"
+        "calendar_url": f"https://via-clara-kuurytmi6.onrender.com/calendar/{token}.ics",
     }
+
+
+# Väliaikainen testireitti selaimella (poistetaan myöhemmin)
+@app.get("/test-create-token")
+def test_create_token():
+    token = secrets.token_urlsafe(16)
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO tokens (token) VALUES (%s)", (token,))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return {
+        "token": token,
+        "calendar_url": f"https://via-clara-kuurytmi6.onrender.com/calendar/{token}.ics",
+    }
+
 
 @app.get("/calendar/{token}.ics")
 def calendar_ics(token: str):
@@ -80,18 +108,3 @@ END:VEVENT
 END:VCALENDAR
 """
     return Response(content=ics, media_type="text/calendar; charset=utf-8")
-@app.get("/test-create-token")
-def test_create_token():
-    token = secrets.token_urlsafe(16)
-
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("INSERT INTO tokens (token) VALUES (%s)", (token,))
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    return {
-        "token": token,
-        "calendar_url": f"https://via-clara-kuurytmi6.onrender.com/calendar/{token}.ics"
-    }
