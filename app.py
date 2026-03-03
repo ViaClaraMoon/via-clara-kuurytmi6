@@ -75,17 +75,22 @@ def home():
 
 @app.get("/buy-monthly")
 def buy_monthly():
-    if not STRIPE_SECRET_KEY or not STRIPE_PRICE_ID_MONTHLY:
-        raise HTTPException(status_code=500, detail="Stripe env vars missing")
+    # Stripe settings
+    stripe.api_key = STRIPE_SECRET_KEY
 
+    # IMPORTANT:
+    # - mode MUST be "subscription"
+    # - line_items MUST use "price": "<price_id>" for recurring prices
     session = stripe.checkout.Session.create(
         mode="subscription",
-        line_items=[{"price": STRIPE_PRICE_ID_MONTHLY, "quantity": 1}],
-        subscription_data={"trial_period_days": 7},
-        success_url=f"{BASE_URL}/thanks?session_id={{CHECKOUT_SESSION_ID}}",
+        line_items=[{
+            "price": STRIPE_PRICE_ID_MONTHLY,
+            "quantity": 1,
+        }],
+        success_url=f"{BASE_URL}/success?session_id={{CHECKOUT_SESSION_ID}}",
         cancel_url=f"{BASE_URL}/cancel",
+        allow_promotion_codes=True,
     )
-    # Palautetaan url, jonka voi avata selaimessa
     return {"url": session.url}
 
 
