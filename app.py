@@ -1,15 +1,31 @@
-from datetime import datetime
-from fastapi import FastAPI, Response, HTTPException
-from fastapi.responses import PlainTextResponse
-import secrets
 import os
+import secrets
+from datetime import datetime
+
 import psycopg2
+import stripe
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse, Response
 
-app = FastAPI(title="Via Clara Kuurytmi API")
+app = FastAPI()
 
+
+# -------------------------
+# Environment
+# -------------------------
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
+STRIPE_PRICE_ID_MONTHLY = os.getenv("STRIPE_PRICE_ID_MONTHLY")
+BASE_URL = os.getenv("BASE_URL", "https://via-clara-kuurytmi6.onrender.com")
 
+if STRIPE_SECRET_KEY:
+    stripe.api_key = STRIPE_SECRET_KEY
+
+
+# -------------------------
+# Database helpers
+# -------------------------
 def get_connection():
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL is not set")
@@ -24,7 +40,10 @@ def init_db():
         CREATE TABLE IF NOT EXISTS tokens (
             id SERIAL PRIMARY KEY,
             token TEXT UNIQUE NOT NULL,
-            active BOOLEAN DEFAULT TRUE
+            active BOOLEAN DEFAULT TRUE,
+            stripe_session_id TEXT UNIQUE,
+            stripe_subscription_id TEXT UNIQUE,
+            created_at TIMESTAMP DEFAULT NOW()
         );
         """
     )
@@ -38,44 +57,73 @@ def startup():
     init_db()
 
 
-@app.get("/health", response_class=PlainTextResponse)
+# -------------------------
+# Public endpoints
+# -------------------------
+@app.get("/health")
 def health():
-    return "ok"
+    return {"ok": True}
 
 
-@app.post("/create-token")
-def create_token():
+@app.get("/", response_class=HTMLResponse)
+def home():
+    return """
+    <h2>Via Clara – Kuurytmi</h2>
+    <p><a href="/buy-monthly">Aloita 7 päivän kokeilu (3.99€/kk)</a></p>
+    """
+
+
+@app.get("/buy-monthly")
+def buy_monthly():
+    if not STRIPE_SECRET_KEY or not STRIPE_PRICE_ID_MONTHLY:
+        raise HTTPException(status_code=500, detail="Stripe env vars missing")
+
+    session = stripe.checkout.Session.create(
+        mode="subscription",
+        line_items=[{"price": STRIPE_PRICE_ID_MONTHLY, "quantity": 1}],
+        subscription_data={"trial_period_days": 7},
+        success_url=f"{BASE_URL}/thanks?session_id={{CHECKOUT_SESSION_ID}}",
+        cancel_url=f"{BASE_URL}/cancel",
+    )
+    # Palautetaan url, jonka voi avata selaimessa
+    return {"url": session.url}
+
+
+@app.get("/cancel", response_class=HTMLResponse)
+def cancel():
+    return "<h3>Peruit maksun.</h3>"
+
+
+@app.get("/thanks", response_class=HTMLResponse)
+def thanks(session_id: str):
+    # Odotetaan että token syntyy jo tässä (ilman webhookia)
     token = secrets.token_urlsafe(16)
 
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("INSERT INTO tokens (token) VALUES (%s)", (token,))
-    conn.commit()
+    # Jos session_id on jo olemassa, käytetään samaa tokenia
+    cur.execute("SELECT token FROM tokens WHERE stripe_session_id = %s", (session_id,))
+    row = cur.fetchone()
+    if row:
+        token = row[0]
+    else:
+        cur.execute(
+            "INSERT INTO tokens (token, active, stripe_session_id) VALUES (%s, TRUE, %s)",
+            (token, session_id),
+        )
+        conn.commit()
     cur.close()
     conn.close()
 
-    return {
-        "token": token,
-        "calendar_url": f"https://via-clara-kuurytmi6.onrender.com/calendar/{token}.ics",
-    }
-
-
-# Väliaikainen testireitti selaimella (poistetaan myöhemmin)
-@app.get("/test-create-token")
-def test_create_token():
-    token = secrets.token_urlsafe(16)
-
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("INSERT INTO tokens (token) VALUES (%s)", (token,))
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    return {
-        "token": token,
-        "calendar_url": f"https://via-clara-kuurytmi6.onrender.com/calendar/{token}.ics",
-    }
+    cal_url = f"{BASE_URL}/calendar/{token}.ics"
+    return HTMLResponse(
+        f"""
+        <h2>Kiitos! 🌙</h2>
+        <p>Tässä on henkilökohtainen kalenterilinkkisi:</p>
+        <p><a href="{cal_url}">{cal_url}</a></p>
+        <p><b>Google Kalenteri:</b> Asetukset → Lisää kalenteri → URL → liitä linkki</p>
+        """
+    )
 
 
 @app.get("/calendar/{token}.ics")
@@ -91,7 +139,6 @@ def calendar_ics(token: str):
         raise HTTPException(status_code=403, detail="Invalid or inactive token")
 
     now_utc = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-
     ics = f"""BEGIN:VCALENDAR
 VERSION:2.0
 PRODID:-//Via Clara//Kuurytmi Backend//FI
