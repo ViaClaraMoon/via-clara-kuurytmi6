@@ -6,6 +6,7 @@ import psycopg2
 import stripe
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 app = FastAPI()
 
@@ -160,3 +161,31 @@ END:VEVENT
 END:VCALENDAR
 """
     return Response(content=ics, media_type="text/calendar; charset=utf-8")
+@app.get("/success", response_class=HTMLResponse)
+def success(session_id: str):
+    # 1) Haetaan Checkout Session Stripeltä
+    session = stripe.checkout.Session.retrieve(session_id)
+
+    # 2) Varmistetaan että maksu / tilaus on OK
+    # (subscription-moodissa payment_status on yleensä 'paid' kun ensimmäinen maksu onnistui)
+    if session.get("payment_status") != "paid":
+        return HTMLResponse(
+            "<h2>Maksu ei vielä vahvistunut.</h2><p>Odota hetki ja päivitä sivu.</p>",
+            status_code=402,
+        )
+
+    # 3) Luodaan token ja palautetaan kalenterilinkki
+    data = create_token()
+    cal_url = data["calendar_url"]
+
+    html = f"""
+    <h2>Kiitos! Tilauksesi on aktiivinen ✅</h2>
+    <p>Tässä sinun henkilökohtainen kalenterilinkki:</p>
+    <p><a href="{cal_url}">{cal_url}</a></p>
+    <p>Lisää se Google Kalenteriin: Asetukset → Lisää kalenteri → URL-osoitteesta.</p>
+    """
+    return HTMLResponse(html)
+
+@app.get("/cancel", response_class=HTMLResponse)
+def cancel():
+    return HTMLResponse("<h2>Peruit maksun.</h2><p>Voit yrittää uudelleen milloin vain.</p>")
