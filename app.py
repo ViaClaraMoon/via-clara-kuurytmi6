@@ -55,6 +55,16 @@ def init_db():
     conn.close()
 
 
+def ensure_tokens_schema():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS stripe_session_id TEXT;")
+    cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT;")
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
 @app.on_event("startup")
 def startup():
     init_db()
@@ -102,6 +112,7 @@ def buy_monthly():
 
 @app.get("/success", response_class=HTMLResponse)
 def success(session_id: str):
+    ensure_tokens_schema()
     """
     Stripe ohjaa tänne muodossa:
     /success?session_id={CHECKOUT_SESSION_ID}
