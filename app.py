@@ -188,3 +188,25 @@ def success(session_id: str):
 @app.get("/cancel", response_class=HTMLResponse)
 def cancel():
     return HTMLResponse("<h2>Peruit maksun.</h2><p>Voit yrittää uudelleen milloin vain.</p>")
+
+@app.get("/success", response_class=HTMLResponse)
+def success():
+    return """
+    <html>
+      <body>
+        <h1>Maksu onnistui ✅</h1>
+        <p>Kiitos! Voit nyt palata sovellukseen.</p>
+      </body>
+    </html>
+    """
+
+@app.get("/cancel", response_class=HTMLResponse)
+def cancel():
+    return """
+    <html>
+      <body>
+        <h1>Maksu peruttiin ❌</h1>
+        <p>Voit yrittää uudelleen milloin vain.</p>
+      </body>
+    </html>
+    """
