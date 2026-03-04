@@ -34,18 +34,22 @@ def get_connection():
 def init_db():
     conn = get_connection()
     cur = conn.cursor()
+
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS tokens (
             id SERIAL PRIMARY KEY,
             token TEXT UNIQUE NOT NULL,
             active BOOLEAN DEFAULT TRUE,
-            stripe_session_id TEXT UNIQUE,
-            stripe_subscription_id TEXT UNIQUE,
             created_at TIMESTAMP DEFAULT NOW()
         );
         """
     )
+
+    # Lisää puuttuvat sarakkeet jos niitä ei ole
+    cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS stripe_session_id TEXT UNIQUE;")
+    cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT UNIQUE;")
+
     conn.commit()
     cur.close()
     conn.close()
