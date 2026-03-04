@@ -4,7 +4,7 @@ from datetime import datetime
 
 import psycopg2
 import stripe
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 app = FastAPI()
@@ -16,6 +16,8 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_PRICE_ID_MONTHLY = os.getenv("STRIPE_PRICE_ID_MONTHLY")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
+
 BASE_URL = os.getenv("BASE_URL", "https://via-clara-kuurytmi6.onrender.com")
 
 if STRIPE_SECRET_KEY:
@@ -35,6 +37,7 @@ def init_db():
     conn = get_connection()
     cur = conn.cursor()
 
+    # Create base table (won't modify if already exists)
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS tokens (
@@ -46,9 +49,9 @@ def init_db():
         """
     )
 
-    # Lisää puuttuvat sarakkeet jos niitä ei ole
-    cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS stripe_session_id TEXT UNIQUE;")
-    cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT UNIQUE;")
+    # Add columns if missing (safe on old DB)
+    cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS stripe_session_id TEXT;")
+    cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT;")
 
     conn.commit()
     cur.close()
@@ -56,6 +59,7 @@ def init_db():
 
 
 def ensure_tokens_schema():
+    """Safety net: make sure required columns exist before using them."""
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS stripe_session_id TEXT;")
@@ -93,6 +97,9 @@ def buy_monthly():
     if not STRIPE_PRICE_ID_MONTHLY:
         raise HTTPException(status_code=500, detail="STRIPE_PRICE_ID_MONTHLY is not set")
 
+    # stripe.api_key is already set globally if STRIPE_SECRET_KEY exists,
+    # but setting again doesn't hurt. We'll rely on the global config.
+
     session = stripe.checkout.Session.create(
         mode="subscription",
         line_items=[
@@ -106,25 +113,24 @@ def buy_monthly():
         allow_promotion_codes=True,
     )
 
-    # Parempi UX: ohjaa suoraan Stripeen
     return RedirectResponse(session.url, status_code=303)
 
 
 @app.get("/success", response_class=HTMLResponse)
 def success(session_id: str):
-    ensure_tokens_schema()
     """
     Stripe ohjaa tänne muodossa:
     /success?session_id={CHECKOUT_SESSION_ID}
     """
+    ensure_tokens_schema()
+
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id is required")
 
-    # (Valinnainen mutta hyödyllinen) Varmistus Stripeltä:
-    # Jos haluat pitää tämän super-yksinkertaisena, tämän voisi poistaa,
-    # mutta tässä on kevyt tarkistus että session löytyy.
+    # Hae session ja subscription id Stripeltä
     try:
-        _ = stripe.checkout.Session.retrieve(session_id)
+        session = stripe.checkout.Session.retrieve(session_id)
+        subscription_id = session.get("subscription")
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid session_id")
 
@@ -133,15 +139,24 @@ def success(session_id: str):
 
     conn = get_connection()
     cur = conn.cursor()
+
     cur.execute("SELECT token FROM tokens WHERE stripe_session_id = %s", (session_id,))
     row = cur.fetchone()
 
     if row:
         token = row[0]
+        # Päivitä subscription_id jos se puuttuu (tai jätä ennalleen)
+        cur.execute(
+            "UPDATE tokens SET stripe_subscription_id = COALESCE(stripe_subscription_id, %s) "
+            "WHERE stripe_session_id = %s",
+            (subscription_id, session_id),
+        )
+        conn.commit()
     else:
         cur.execute(
-            "INSERT INTO tokens (token, active, stripe_session_id) VALUES (%s, TRUE, %s)",
-            (token, session_id),
+            "INSERT INTO tokens (token, active, stripe_session_id, stripe_subscription_id) "
+            "VALUES (%s, TRUE, %s, %s)",
+            (token, session_id, subscription_id),
         )
         conn.commit()
 
@@ -196,3 +211,56 @@ END:VEVENT
 END:VCALENDAR
 """
     return Response(content=ics, media_type="text/calendar; charset=utf-8")
+
+
+# -------------------------
+# Stripe webhook
+# -------------------------
+@app.post("/stripe/webhook")
+async def stripe_webhook(request: Request):
+    if not STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(status_code=500, detail="STRIPE_WEBHOOK_SECRET is not set")
+
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature")
+
+    try:
+        event = stripe.Webhook.construct_event(
+            payload=payload,
+            sig_header=sig_header,
+            secret=STRIPE_WEBHOOK_SECRET,
+        )
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid webhook signature")
+
+    event_type = event["type"]
+
+    # invoice.payment_failed -> subscription id is in data.object.subscription
+    if event_type == "invoice.payment_failed":
+        sub_id = event["data"]["object"].get("subscription")
+        if sub_id:
+            conn = get_connection()
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE tokens SET active = FALSE WHERE stripe_subscription_id = %s",
+                (sub_id,),
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
+
+    # customer.subscription.deleted -> subscription id is in data.object.id
+    if event_type == "customer.subscription.deleted":
+        sub_id = event["data"]["object"].get("id")
+        if sub_id:
+            conn = get_connection()
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE tokens SET active = FALSE WHERE stripe_subscription_id = %s",
+                (sub_id,),
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
+
+    return {"ok": True}
