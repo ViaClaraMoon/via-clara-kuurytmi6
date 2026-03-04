@@ -5,8 +5,7 @@ from datetime import datetime
 import psycopg2
 import stripe
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, Response
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 app = FastAPI()
 
