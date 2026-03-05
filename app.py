@@ -17,6 +17,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_PRICE_ID_MONTHLY = os.getenv("STRIPE_PRICE_ID_MONTHLY")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
+DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 
 BASE_URL = os.getenv("BASE_URL", "https://via-clara-kuurytmi6.onrender.com")
 
