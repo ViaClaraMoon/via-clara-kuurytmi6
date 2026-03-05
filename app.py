@@ -87,26 +87,21 @@ def moon_sign_index_at(eph, ts, dt_utc: datetime) -> int:
 
 
 def build_ics_for_token(token: str, tz_name: str) -> bytes:
-    """
-    Emoji-only calendar for ~12 months:
-      - New Moon: 🌑 ✂️⬆️ + sign/element emoji + plant emoji + time
-      - Full Moon: 🌕 ✂️⬇️ + sign/element emoji + plant emoji + time
-      - Moon sign ingresses: sign/element emoji + plant emoji + time
-    """
-    # timezone
+
     try:
         tz = ZoneInfo(tz_name)
     except Exception:
         tz = ZoneInfo(DEFAULT_TIMEZONE)
         tz_name = DEFAULT_TIMEZONE
 
-    # skyfield preloaded
     ts = TS
     eph = EPH
+
     if ts is None or eph is None:
         raise RuntimeError("Skyfield not initialized")
 
     now_utc = datetime.now(timezone.utc)
+
     t0 = ts.from_datetime(now_utc)
     t1 = ts.from_datetime(now_utc + timedelta(days=365))
 
@@ -117,56 +112,67 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
     cal.add("x-wr-calname", "Via Clara – Kuurytmi")
     cal.add("x-wr-timezone", tz_name)
 
-    # A) New Moon + Full Moon only
     phase_func = almanac.moon_phases(eph)
     phase_times, phase_ids = almanac.find_discrete(t0, t1, phase_func)
 
     for t, pid in zip(phase_times, phase_ids):
+
         pid = int(pid)
+
         if pid not in (0, 2):
             continue
 
         dt_utc = t.utc_datetime().replace(tzinfo=timezone.utc)
         dt_local = dt_utc.astimezone(tz)
+
         time_str = fmt_hhmm(dt_local)
 
         idx = moon_sign_index_at(eph, ts, dt_utc)
         _, sign_emoji = ZODIAC_SIGNS[idx]
+
         plant = plant_emoji_from_sign(sign_emoji)
 
         if pid == 0:
             summary = f"🌑 ✂️⬆️ {sign_emoji} {plant} {time_str}"
             uid_prefix = "new"
-            duration = timedelta(minutes=15)
         else:
             summary = f"🌕 ✂️⬇️ {sign_emoji} {plant} {time_str}"
             uid_prefix = "full"
-            duration = timedelta(minutes=15)
 
         ev = Event()
         ev.add("uid", f"{token}-{uid_prefix}-{int(dt_utc.timestamp())}@via-clara")
         ev.add("summary", summary)
         ev.add("description", summary)
         ev.add("dtstart", dt_local)
-        ev.add("dtend", dt_local + duration)
+        ev.add("dtend", dt_local + timedelta(minutes=15))
         ev.add("dtstamp", now_utc)
+
         cal.add_component(ev)
 
-    # B) Moon sign ingresses
     def moon_sign_index_vector(t_skyfield):
+
         astrometric = eph["earth"].at(t_skyfield).observe(eph["moon"]).apparent()
         lon = astrometric.ecliptic_latlon()[1]
+
         deg = lon.degrees % 360.0
+
         return np.floor_divide(deg, 30).astype(int)
 
-    ingress_times, ingress_idxs = almanac.find_discrete(t0, t1, moon_sign_index_vector)
+    ingress_times, ingress_idxs = almanac.find_discrete(
+        t0,
+        t1,
+        moon_sign_index_vector
+    )
 
     for t, idx in zip(ingress_times, ingress_idxs):
+
         dt_utc = t.utc_datetime().replace(tzinfo=timezone.utc)
         dt_local = dt_utc.astimezone(tz)
+
         time_str = fmt_hhmm(dt_local)
 
         _, sign_emoji = ZODIAC_SIGNS[int(idx)]
+
         plant = plant_emoji_from_sign(sign_emoji)
 
         summary = f"{sign_emoji} {plant} {time_str}"
@@ -178,6 +184,7 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
         ev.add("dtstart", dt_local)
         ev.add("dtend", dt_local + timedelta(minutes=10))
         ev.add("dtstamp", now_utc)
+
         cal.add_component(ev)
 
     return cal.to_ical()
