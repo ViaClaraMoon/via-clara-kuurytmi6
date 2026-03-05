@@ -37,21 +37,21 @@ def init_db():
     conn = get_connection()
     cur = conn.cursor()
 
-    # Create base table (won't modify if already exists)
+    # Base table (won't modify if already exists)
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS tokens (
             id SERIAL PRIMARY KEY,
             token TEXT UNIQUE NOT NULL,
-            active BOOLEAN DEFAULT TRUE,
-            created_at TIMESTAMP DEFAULT NOW()
+            active BOOLEAN DEFAULT TRUE
         );
         """
     )
 
-    # Add columns if missing (safe on old DB)
+    # Add missing columns safely (for old DBs)
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS stripe_session_id TEXT;")
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT;")
+    cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();")
 
     conn.commit()
     cur.close()
@@ -64,6 +64,7 @@ def ensure_tokens_schema():
     cur = conn.cursor()
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS stripe_session_id TEXT;")
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT;")
+    cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();")
     conn.commit()
     cur.close()
     conn.close()
@@ -81,8 +82,11 @@ def startup():
 def health():
     return {"ok": True}
 
+
 @app.get("/debug/token/{token}")
 def debug_token(token: str):
+    ensure_tokens_schema()
+
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
@@ -105,6 +109,7 @@ def debug_token(token: str):
         "created_at": str(created_at),
     }
 
+
 @app.get("/", response_class=HTMLResponse)
 def home():
     return """
@@ -119,9 +124,6 @@ def buy_monthly():
         raise HTTPException(status_code=500, detail="STRIPE_SECRET_KEY is not set")
     if not STRIPE_PRICE_ID_MONTHLY:
         raise HTTPException(status_code=500, detail="STRIPE_PRICE_ID_MONTHLY is not set")
-
-    # stripe.api_key is already set globally if STRIPE_SECRET_KEY exists,
-    # but setting again doesn't hurt. We'll rely on the global config.
 
     session = stripe.checkout.Session.create(
         mode="subscription",
@@ -150,14 +152,13 @@ def success(session_id: str):
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id is required")
 
-    # Hae session ja subscription id Stripeltä
+    # Fetch Checkout Session + subscription id
     try:
         session = stripe.checkout.Session.retrieve(session_id)
         subscription_id = session.get("subscription")
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid session_id")
 
-    # Luo tai hae token tälle session_id:lle
     token = secrets.token_urlsafe(16)
 
     conn = get_connection()
@@ -168,7 +169,7 @@ def success(session_id: str):
 
     if row:
         token = row[0]
-        # Päivitä subscription_id jos se puuttuu (tai jätä ennalleen)
+        # Ensure subscription id is stored (if missing)
         cur.execute(
             "UPDATE tokens SET stripe_subscription_id = COALESCE(stripe_subscription_id, %s) "
             "WHERE stripe_session_id = %s",
@@ -200,13 +201,13 @@ def success(session_id: str):
 
 @app.get("/cancel", response_class=HTMLResponse)
 def cancel():
-    return HTMLResponse(
-        "<h2>Peruit maksun.</h2><p>Voit yrittää uudelleen milloin vain.</p>"
-    )
+    return HTMLResponse("<h2>Peruit maksun.</h2><p>Voit yrittää uudelleen milloin vain.</p>")
 
 
 @app.get("/calendar/{token}.ics")
 def calendar_ics(token: str):
+    ensure_tokens_schema()
+
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("SELECT active FROM tokens WHERE token = %s", (token,))
@@ -258,7 +259,7 @@ async def stripe_webhook(request: Request):
 
     event_type = event["type"]
 
-    # invoice.payment_failed -> subscription id is in data.object.subscription
+    # payment failed -> disable
     if event_type == "invoice.payment_failed":
         sub_id = event["data"]["object"].get("subscription")
         if sub_id:
@@ -272,7 +273,7 @@ async def stripe_webhook(request: Request):
             cur.close()
             conn.close()
 
-    # customer.subscription.deleted -> subscription id is in data.object.id
+    # subscription deleted -> disable
     if event_type == "customer.subscription.deleted":
         sub_id = event["data"]["object"].get("id")
         if sub_id:
@@ -286,7 +287,7 @@ async def stripe_webhook(request: Request):
             cur.close()
             conn.close()
 
-    # Subscription muuttui -> jos status on canceled, disabloi token
+    # subscription updated -> if canceled, disable
     if event_type == "customer.subscription.updated":
         sub = event["data"]["object"]
         sub_id = sub.get("id")
@@ -302,5 +303,5 @@ async def stripe_webhook(request: Request):
             conn.commit()
             cur.close()
             conn.close()
-            
+
     return {"ok": True}
