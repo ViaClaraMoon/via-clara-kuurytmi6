@@ -80,7 +80,8 @@ def startup():
 def health():
     return {"ok": True}
 
-
+if not DEBUG:
+        raise HTTPException(status_code=404, detail="Not found")
 @app.get("/debug/token/{token}")
 def debug_token(token: str):
     ensure_tokens_schema()
