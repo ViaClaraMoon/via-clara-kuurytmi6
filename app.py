@@ -22,6 +22,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_PRICE_ID_MONTHLY = os.getenv("STRIPE_PRICE_ID_MONTHLY")
+STRIPE_PRICE_ID_YEARLY = os.getenv("STRIPE_PRICE_ID_YEARLY")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
 
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
@@ -39,7 +40,6 @@ SKYFIELD_DIR = os.getenv("SKYFIELD_DIR", "/tmp/skyfield")
 os.makedirs(SKYFIELD_DIR, exist_ok=True)
 
 _sky_loader = Loader(SKYFIELD_DIR)
-
 TS = None
 EPH = None
 
@@ -88,20 +88,19 @@ def moon_sign_index_at(eph, ts, dt_utc: datetime) -> int:
 
 def build_ics_for_token(token: str, tz_name: str) -> bytes:
     """
-    Calendar contains ONLY:
+    Emoji-only calendar for ~12 months:
       - New Moon: 🌑 ✂️⬆️ + sign/element emoji + plant emoji + time
       - Full Moon: 🌕 ✂️⬇️ + sign/element emoji + plant emoji + time
       - Moon sign ingresses: sign/element emoji + plant emoji + time
-    ~12 months ahead, token's timezone.
     """
-    # timezone for output
+    # timezone
     try:
         tz = ZoneInfo(tz_name)
     except Exception:
         tz = ZoneInfo(DEFAULT_TIMEZONE)
         tz_name = DEFAULT_TIMEZONE
 
-    # skyfield preloaded objects
+    # skyfield preloaded
     ts = TS
     eph = EPH
     if ts is None or eph is None:
@@ -261,8 +260,7 @@ def set_token_timezone(token: str, tz: str):
 def startup():
     global TS, EPH
     init_db()
-
-    # Preload ephemeris so /calendar won't try downloading on first user request
+    # Preload ephemeris (fixes first-request 500 on some hosts)
     TS = _sky_loader.timescale()
     EPH = _sky_loader("de421.bsp")
 
@@ -281,11 +279,11 @@ def debug_token(token: str):
         raise HTTPException(status_code=404, detail="Not found")
 
     ensure_tokens_schema()
-
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "SELECT active, stripe_session_id, stripe_subscription_id, created_at, timezone FROM tokens WHERE token = %s",
+        "SELECT active, stripe_session_id, stripe_subscription_id, created_at, timezone "
+        "FROM tokens WHERE token = %s",
         (token,),
     )
     row = cur.fetchone()
@@ -310,7 +308,8 @@ def debug_token(token: str):
 def home():
     return """
     <h2>Via Clara – Kuurytmi</h2>
-    <p><a href="/buy-monthly">Aloita 7 päivän kokeilu (3.99€/kk)</a></p>
+    <p><a href="/buy-monthly">Tilaa kuukausittain (3,99€/kk)</a></p>
+    <p><a href="/buy-yearly">Tilaa vuodeksi (34,90€/vuosi)</a></p>
     """
 
 
@@ -328,14 +327,29 @@ def buy_monthly():
         cancel_url=f"{BASE_URL}/cancel",
         allow_promotion_codes=True,
     )
+    return RedirectResponse(session.url, status_code=303)
 
+
+@app.get("/buy-yearly")
+def buy_yearly():
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=500, detail="STRIPE_SECRET_KEY is not set")
+    if not STRIPE_PRICE_ID_YEARLY:
+        raise HTTPException(status_code=500, detail="STRIPE_PRICE_ID_YEARLY is not set")
+
+    session = stripe.checkout.Session.create(
+        mode="subscription",
+        line_items=[{"price": STRIPE_PRICE_ID_YEARLY, "quantity": 1}],
+        success_url=f"{BASE_URL}/success?session_id={{CHECKOUT_SESSION_ID}}",
+        cancel_url=f"{BASE_URL}/cancel",
+        allow_promotion_codes=True,
+    )
     return RedirectResponse(session.url, status_code=303)
 
 
 @app.get("/success", response_class=HTMLResponse)
 def success(session_id: str):
     ensure_tokens_schema()
-
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id is required")
 
@@ -350,7 +364,6 @@ def success(session_id: str):
 
     conn = get_connection()
     cur = conn.cursor()
-
     cur.execute("SELECT token FROM tokens WHERE stripe_session_id = %s", (session_id,))
     row = cur.fetchone()
 
@@ -379,7 +392,6 @@ def success(session_id: str):
     return HTMLResponse(
         f"""
         <h2>Kiitos! Tilauksesi on käsitelty ✅</h2>
-
         <p><b>Kalenterilinkkisi:</b></p>
         <p><a href="{cal_url}">{cal_url}</a></p>
 
@@ -417,7 +429,6 @@ def tz_form(token: str):
         "America/Los_Angeles",
         "Australia/Sydney",
     ]
-
     option_html = "\n".join(
         f'<option value="{tz}" {"selected" if tz == current_tz else ""}>{tz}</option>'
         for tz in options
@@ -457,7 +468,6 @@ async def tz_save(request: Request):
     exists = cur.fetchone()
     cur.close()
     conn.close()
-
     if not exists:
         raise HTTPException(status_code=404, detail="Not found")
 
@@ -573,4 +583,4 @@ async def stripe_webhook(request: Request):
             cur.close()
             conn.close()
 
-    return {"ok": True}
+    return {"ok": True}6
