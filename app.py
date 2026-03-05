@@ -87,7 +87,6 @@ def moon_sign_index_at(eph, ts, dt_utc: datetime) -> int:
 
 
 def build_ics_for_token(token: str, tz_name: str) -> bytes:
-
     try:
         tz = ZoneInfo(tz_name)
     except Exception:
@@ -96,12 +95,10 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
 
     ts = TS
     eph = EPH
-
     if ts is None or eph is None:
         raise RuntimeError("Skyfield not initialized")
 
     now_utc = datetime.now(timezone.utc)
-
     t0 = ts.from_datetime(now_utc)
     t1 = ts.from_datetime(now_utc + timedelta(days=365))
 
@@ -112,67 +109,56 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
     cal.add("x-wr-calname", "Via Clara – Kuurytmi")
     cal.add("x-wr-timezone", tz_name)
 
+    # New moon + full moon
     phase_func = almanac.moon_phases(eph)
     phase_times, phase_ids = almanac.find_discrete(t0, t1, phase_func)
 
     for t, pid in zip(phase_times, phase_ids):
-
         pid = int(pid)
-
         if pid not in (0, 2):
             continue
 
         dt_utc = t.utc_datetime().replace(tzinfo=timezone.utc)
         dt_local = dt_utc.astimezone(tz)
-
         time_str = fmt_hhmm(dt_local)
 
         idx = moon_sign_index_at(eph, ts, dt_utc)
         _, sign_emoji = ZODIAC_SIGNS[idx]
-
         plant = plant_emoji_from_sign(sign_emoji)
 
         if pid == 0:
             summary = f"🌑 ✂️⬆️ {sign_emoji} {plant} {time_str}"
             uid_prefix = "new"
+            duration = timedelta(minutes=15)
         else:
             summary = f"🌕 ✂️⬇️ {sign_emoji} {plant} {time_str}"
             uid_prefix = "full"
+            duration = timedelta(minutes=15)
 
         ev = Event()
         ev.add("uid", f"{token}-{uid_prefix}-{int(dt_utc.timestamp())}@via-clara")
         ev.add("summary", summary)
         ev.add("description", summary)
         ev.add("dtstart", dt_local)
-        ev.add("dtend", dt_local + timedelta(minutes=15))
+        ev.add("dtend", dt_local + duration)
         ev.add("dtstamp", now_utc)
-
         cal.add_component(ev)
 
+    # Moon sign ingresses
     def moon_sign_index_vector(t_skyfield):
-
         astrometric = eph["earth"].at(t_skyfield).observe(eph["moon"]).apparent()
         lon = astrometric.ecliptic_latlon()[1]
-
         deg = lon.degrees % 360.0
-
         return np.floor_divide(deg, 30).astype(int)
 
-    ingress_times, ingress_idxs = almanac.find_discrete(
-        t0,
-        t1,
-        moon_sign_index_vector
-    )
+    ingress_times, ingress_idxs = almanac.find_discrete(t0, t1, moon_sign_index_vector)
 
     for t, idx in zip(ingress_times, ingress_idxs):
-
         dt_utc = t.utc_datetime().replace(tzinfo=timezone.utc)
         dt_local = dt_utc.astimezone(tz)
-
         time_str = fmt_hhmm(dt_local)
 
         _, sign_emoji = ZODIAC_SIGNS[int(idx)]
-
         plant = plant_emoji_from_sign(sign_emoji)
 
         summary = f"{sign_emoji} {plant} {time_str}"
@@ -184,7 +170,6 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
         ev.add("dtstart", dt_local)
         ev.add("dtend", dt_local + timedelta(minutes=10))
         ev.add("dtstamp", now_utc)
-
         cal.add_component(ev)
 
     return cal.to_ical()
@@ -202,7 +187,6 @@ def get_connection():
 def init_db():
     conn = get_connection()
     cur = conn.cursor()
-
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS tokens (
@@ -212,12 +196,10 @@ def init_db():
         );
         """
     )
-
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS stripe_session_id TEXT;")
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT;")
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();")
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS timezone TEXT;")
-
     conn.commit()
     cur.close()
     conn.close()
@@ -267,7 +249,6 @@ def set_token_timezone(token: str, tz: str):
 def startup():
     global TS, EPH
     init_db()
-    # Preload ephemeris (fixes first-request 500 on some hosts)
     TS = _sky_loader.timescale()
     EPH = _sky_loader("de421.bsp")
 
@@ -278,37 +259,6 @@ def startup():
 @app.get("/health")
 def health():
     return {"ok": True}
-
-
-@app.get("/debug/token/{token}")
-def debug_token(token: str):
-    if not DEBUG:
-        raise HTTPException(status_code=404, detail="Not found")
-
-    ensure_tokens_schema()
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT active, stripe_session_id, stripe_subscription_id, created_at, timezone "
-        "FROM tokens WHERE token = %s",
-        (token,),
-    )
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
-
-    if not row:
-        raise HTTPException(status_code=404, detail="token not found")
-
-    active, sess_id, sub_id, created_at, tz = row
-    return {
-        "token": token,
-        "active": active,
-        "stripe_session_id": sess_id,
-        "stripe_subscription_id": sub_id,
-        "created_at": str(created_at),
-        "timezone": tz or DEFAULT_TIMEZONE,
-    }
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -401,11 +351,7 @@ def success(session_id: str):
         <h2>Kiitos! Tilauksesi on käsitelty ✅</h2>
         <p><b>Kalenterilinkkisi:</b></p>
         <p><a href="{cal_url}">{cal_url}</a></p>
-
-        <p><b>Aikavyöhyke:</b> {DEFAULT_TIMEZONE}</p>
         <p><a href="{tz_url}">Vaihda aikavyöhyke</a></p>
-
-        <p><b>Google Kalenteri:</b> Asetukset → Lisää kalenteri → URL → liitä linkki</p>
         """
     )
 
@@ -447,15 +393,9 @@ def tz_form(token: str):
         <p>Token: <code>{token}</code></p>
         <form method="post" action="/tz">
             <input type="hidden" name="token" value="{token}" />
-            <label for="timezone">Valitse aikavyöhyke:</label><br/>
-            <select id="timezone" name="timezone">
-                {option_html}
-            </select>
-            <p style="margin-top:12px;">
-                <button type="submit">Tallenna</button>
-            </p>
+            <select name="timezone">{option_html}</select>
+            <p><button type="submit">Tallenna</button></p>
         </form>
-        <p>Huom: Google Calendar voi päivittää URL-kalenterin viiveellä.</p>
         """
     )
 
@@ -475,26 +415,19 @@ async def tz_save(request: Request):
     exists = cur.fetchone()
     cur.close()
     conn.close()
+
     if not exists:
         raise HTTPException(status_code=404, detail="Not found")
 
     set_token_timezone(token, tz)
 
     cal_url = f"{BASE_URL}/calendar/{token}.ics"
-    return HTMLResponse(
-        f"""
-        <h2>Tallennettu ✅</h2>
-        <p>Aikavyöhyke: <b>{tz}</b></p>
-        <p>Kalenterilinkki:</p>
-        <p><a href="{cal_url}">{cal_url}</a></p>
-        <p>Huom: Google Calendar voi päivittää URL-kalenterin viiveellä.</p>
-        """
-    )
+    return HTMLResponse(f"<h2>Tallennettu ✅</h2><p><a href='{cal_url}'>Kalenterilinkki</a></p>")
 
 
 @app.get("/cancel", response_class=HTMLResponse)
 def cancel():
-    return HTMLResponse("<h2>Peruit maksun.</h2><p>Voit yrittää uudelleen milloin vain.</p>")
+    return HTMLResponse("<h2>Peruit maksun.</h2>")
 
 
 @app.get("/calendar/{token}.ics")
@@ -514,19 +447,9 @@ def calendar_ics(token: str):
     tz_name = get_token_timezone(token)
     ics_bytes = build_ics_for_token(token, tz_name)
 
-    return Response(
-        content=ics_bytes,
-        media_type="text/calendar; charset=utf-8",
-        headers={
-            "Content-Disposition": f'inline; filename="kuurytmi-{token}.ics"',
-            "Cache-Control": "public, max-age=3600",
-        },
-    )
+    return Response(content=ics_bytes, media_type="text/calendar; charset=utf-8")
 
 
-# -------------------------
-# Stripe webhook
-# -------------------------
 @app.post("/stripe/webhook")
 async def stripe_webhook(request: Request):
     if not STRIPE_WEBHOOK_SECRET:
@@ -590,4 +513,4 @@ async def stripe_webhook(request: Request):
             cur.close()
             conn.close()
 
-    return {"ok": True}6
+    return {"ok": True}
