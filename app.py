@@ -30,6 +30,18 @@ BASE_URL = os.getenv("BASE_URL", "https://via-clara-kuurytmi6.onrender.com")
 
 DEFAULT_TIMEZONE = os.getenv("DEFAULT_TIMEZONE", "Europe/Helsinki")
 
+# -------------------------
+# Skyfield (load once, cache in /tmp)
+# -------------------------
+SKYFIELD_DIR = os.getenv("SKYFIELD_DIR", "/tmp/skyfield")
+os.makedirs(SKYFIELD_DIR, exist_ok=True)
+
+_sky_loader = Loader(SKYFIELD_DIR)
+
+# These will be initialized on startup
+TS = None
+EPH = None
+
 if STRIPE_SECRET_KEY:
     stripe.api_key = STRIPE_SECRET_KEY
 
@@ -102,8 +114,11 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
         tz_name = DEFAULT_TIMEZONE
 
     now_utc = datetime.now(timezone.utc)
-    ts = load.timescale()
-    eph = load("de421.bsp")
+    
+ ts = TS
+eph = EPH
+if ts is None or eph is None:
+    raise RuntimeError("Skyfield not initialized")
 
     t0 = ts.from_datetime(now_utc)
     t1 = ts.from_datetime(now_utc + timedelta(days=365))
@@ -265,7 +280,12 @@ def set_token_timezone(token: str, tz: str):
 
 @app.on_event("startup")
 def startup():
+    global TS, EPH
     init_db()
+
+    # Preload ephemeris so /calendar won't try downloading on first user request
+    TS = _sky_loader.timescale()
+    EPH = _sky_loader("de421.bsp")
 
 
 # -------------------------
