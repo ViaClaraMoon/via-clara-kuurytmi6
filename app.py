@@ -17,6 +17,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_PRICE_ID_MONTHLY = os.getenv("STRIPE_PRICE_ID_MONTHLY")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
+
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 
 BASE_URL = os.getenv("BASE_URL", "https://via-clara-kuurytmi6.onrender.com")
@@ -80,10 +81,13 @@ def startup():
 def health():
     return {"ok": True}
 
-if not DEBUG:
-        raise HTTPException(status_code=404, detail="Not found")
+
 @app.get("/debug/token/{token}")
 def debug_token(token: str):
+    # Debug näkyviin vain jos DEBUG=true
+    if not DEBUG:
+        raise HTTPException(status_code=404, detail="Not found")
+
     ensure_tokens_schema()
 
     conn = get_connection()
@@ -260,7 +264,7 @@ async def stripe_webhook(request: Request):
 
     event_type = event["type"]
 
-    # Payment failed -> disable access
+    # Maksu epäonnistui -> katkaise pääsy heti
     if event_type == "invoice.payment_failed":
         sub_id = event["data"]["object"].get("subscription")
         if sub_id:
@@ -274,7 +278,7 @@ async def stripe_webhook(request: Request):
             cur.close()
             conn.close()
 
-    # Subscription deleted -> disable access
+    # Tilaus poistettu -> katkaise
     if event_type == "customer.subscription.deleted":
         sub_id = event["data"]["object"].get("id")
         if sub_id:
@@ -288,15 +292,14 @@ async def stripe_webhook(request: Request):
             cur.close()
             conn.close()
 
-    # Subscription updated -> if canceled OR scheduled to cancel -> disable access
+    # B-malli: katkaise vasta kun oikeasti canceled (ei pelkästä cancel_at_period_end:stä)
     if event_type == "customer.subscription.updated":
         sub = event["data"]["object"]
         sub_id = sub.get("id")
         status = sub.get("status")
-        cancel_at_period_end = sub.get("cancel_at_period_end")
         canceled_at = sub.get("canceled_at")
 
-        if sub_id and (status == "canceled" or cancel_at_period_end is True or canceled_at is not None):
+        if sub_id and (status == "canceled" or canceled_at is not None):
             conn = get_connection()
             cur = conn.cursor()
             cur.execute(
