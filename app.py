@@ -125,28 +125,70 @@ def buy_monthly():
     if not STRIPE_PRICE_ID_MONTHLY:
         raise HTTPException(status_code=500, detail="STRIPE_PRICE_ID_MONTHLY is not set")
 
-    session = stripe.checkout.Session.create(
-        mode="subscription",
-        line_items=[
-            {
-                "price": STRIPE_PRICE_ID_MONTHLY,
-                "quantity": 1,
-            }
-        ],
-        success_url=f"{BASE_URL}/success?session_id={{CHECKOUT_SESSION_ID}}",
-        cancel_url=f"{BASE_URL}/cancel",
-        allow_promotion_codes=True,
-    )
-
-    return RedirectResponse(session.url, status_code=303)
-
-
-@app.get("/success", response_class=HTMLResponse)
+    @app.get("/success", response_class=HTMLResponse)
 def success(session_id: str):
     """
     Stripe ohjaa tänne muodossa:
     /success?session_id={CHECKOUT_SESSION_ID}
     """
+    ensure_tokens_schema()
+
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+
+    # Hae Checkout Session ja subscription id varmasti (expand)
+    try:
+        session = stripe.checkout.Session.retrieve(session_id, expand=["subscription"])
+        subscription = session.get("subscription")
+
+        # subscription voi olla joko id (str) tai dict (jos expanded)
+        if isinstance(subscription, dict):
+            subscription_id = subscription.get("id")
+        else:
+            subscription_id = subscription
+
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid session_id")
+
+    # Luo tai hae token tälle session_id:lle
+    token = secrets.token_urlsafe(16)
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("SELECT token FROM tokens WHERE stripe_session_id = %s", (session_id,))
+    row = cur.fetchone()
+
+    if row:
+        token = row[0]
+        # Päivitä subscription_id jos se puuttuu
+        cur.execute(
+            "UPDATE tokens SET stripe_subscription_id = COALESCE(stripe_subscription_id, %s) "
+            "WHERE stripe_session_id = %s",
+            (subscription_id, session_id),
+        )
+        conn.commit()
+    else:
+        cur.execute(
+            "INSERT INTO tokens (token, active, stripe_session_id, stripe_subscription_id) "
+            "VALUES (%s, TRUE, %s, %s)",
+            (token, session_id, subscription_id),
+        )
+        conn.commit()
+
+    cur.close()
+    conn.close()
+
+    cal_url = f"{BASE_URL}/calendar/{token}.ics"
+
+    return HTMLResponse(
+        f"""
+        <h2>Kiitos! Tilauksesi on käsitelty ✅</h2>
+        <p>Tässä on henkilökohtainen kalenterilinkkisi:</p>
+        <p><a href="{cal_url}">{cal_url}</a></p>
+        <p><b>Google Kalenteri:</b> Asetukset → Lisää kalenteri → URL → liitä linkki</p>
+        """
+    )
     ensure_tokens_schema()
 
     if not session_id:
