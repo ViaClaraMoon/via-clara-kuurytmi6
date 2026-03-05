@@ -258,6 +258,7 @@ async def stripe_webhook(request: Request):
 
     event_type = event["type"]
 
+    # Payment failed -> disable access
     if event_type == "invoice.payment_failed":
         sub_id = event["data"]["object"].get("subscription")
         if sub_id:
@@ -271,6 +272,7 @@ async def stripe_webhook(request: Request):
             cur.close()
             conn.close()
 
+    # Subscription deleted -> disable access
     if event_type == "customer.subscription.deleted":
         sub_id = event["data"]["object"].get("id")
         if sub_id:
@@ -283,27 +285,8 @@ async def stripe_webhook(request: Request):
             conn.commit()
             cur.close()
             conn.close()
-            
-  @app.post("/stripe/webhook")
-async def stripe_webhook(request: Request):
 
-    if not STRIPE_WEBHOOK_SECRET:
-        raise HTTPException(status_code=500, detail="STRIPE_WEBHOOK_SECRET is not set")
-
-    payload = await request.body()
-    sig_header = request.headers.get("stripe-signature")
-
-    try:
-        event = stripe.Webhook.construct_event(
-            payload=payload,
-            sig_header=sig_header,
-            secret=STRIPE_WEBHOOK_SECRET,
-        )
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid webhook signature")
-
-    event_type = event["type"]
-
+    # Subscription updated -> if canceled OR scheduled to cancel -> disable access
     if event_type == "customer.subscription.updated":
         sub = event["data"]["object"]
         sub_id = sub.get("id")
@@ -311,7 +294,7 @@ async def stripe_webhook(request: Request):
         cancel_at_period_end = sub.get("cancel_at_period_end")
         canceled_at = sub.get("canceled_at")
 
-        if sub_id and (status == "canceled" or cancel_at_period_end or canceled_at):
+        if sub_id and (status == "canceled" or cancel_at_period_end is True or canceled_at is not None):
             conn = get_connection()
             cur = conn.cursor()
             cur.execute(
@@ -323,5 +306,3 @@ async def stripe_webhook(request: Request):
             conn.close()
 
     return {"ok": True}
-   
-
