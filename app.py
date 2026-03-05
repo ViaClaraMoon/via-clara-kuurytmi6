@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from icalendar import Calendar, Event
-from skyfield.api import load
+from skyfield.api import load,  Loader
 from skyfield import almanac
 
 app = FastAPI()
