@@ -153,6 +153,8 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
 
     ingress_times, ingress_idxs = almanac.find_discrete(t0, t1, moon_sign_index_vector)
 
+    moon_sign_index_vector.step_days = 0.5
+    
     for t, idx in zip(ingress_times, ingress_idxs):
         dt_utc = t.utc_datetime().replace(tzinfo=timezone.utc)
         dt_local = dt_utc.astimezone(tz)
