@@ -263,4 +263,21 @@ async def stripe_webhook(request: Request):
             cur.close()
             conn.close()
 
+    # Subscription muuttui -> jos status on canceled, disabloi token
+    if event_type == "customer.subscription.updated":
+        sub = event["data"]["object"]
+        sub_id = sub.get("id")
+        status = sub.get("status")
+
+        if sub_id and status == "canceled":
+            conn = get_connection()
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE tokens SET active = FALSE WHERE stripe_subscription_id = %s",
+                (sub_id,),
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
+            
     return {"ok": True}
