@@ -1,11 +1,15 @@
 import os
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import psycopg2
 import stripe
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+
+from icalendar import Calendar, Event
+from skyfield.api import load
+from skyfield import almanac
 
 app = FastAPI()
 
@@ -24,6 +28,70 @@ BASE_URL = os.getenv("BASE_URL", "https://via-clara-kuurytmi6.onrender.com")
 
 if STRIPE_SECRET_KEY:
     stripe.api_key = STRIPE_SECRET_KEY
+
+
+# -------------------------
+# Moon phases (.ics generation)
+# -------------------------
+PHASE_LABELS = {
+    "new_moon": "🌑 Uusikuu",
+    "first_quarter": "🌓 Ensimmäinen neljännes",
+    "full_moon": "🌕 Täysikuu",
+    "last_quarter": "🌗 Viimeinen neljännes",
+}
+
+
+def generate_moon_phase_events(start_dt_utc: datetime):
+    """
+    Palauttaa listan (title, datetime_utc) kuun vaiheista ~12 kk eteenpäin.
+    Datetimet ovat UTC-aikavyöhykkeessä.
+    """
+    # Skyfield setup
+    ts = load.timescale()
+    eph = load("de421.bsp")  # comes via skyfield-data
+
+    t0 = ts.from_datetime(start_dt_utc)
+    t1 = ts.from_datetime(start_dt_utc + timedelta(days=365))
+
+    f = almanac.moon_phases(eph)
+    times, phases = almanac.find_discrete(t0, t1, f)
+
+    # phases: 0 new, 1 first quarter, 2 full, 3 last quarter
+    phase_name = {0: "new_moon", 1: "first_quarter", 2: "full_moon", 3: "last_quarter"}
+
+    out = []
+    for t, p in zip(times, phases):
+        name = phase_name[int(p)]
+        title = PHASE_LABELS[name]
+        dt = t.utc_datetime().replace(tzinfo=timezone.utc)
+        out.append((title, dt))
+    return out
+
+
+def build_ics_for_token(token: str) -> bytes:
+    """
+    Rakentaa RFC5545 .ics -sisällön (bytes) kuun vaiheista seuraavalle 12 kuukaudelle.
+    """
+    now_utc = datetime.now(timezone.utc)
+
+    cal = Calendar()
+    cal.add("prodid", "-//Via Clara//Kuurytmi Backend//FI")
+    cal.add("version", "2.0")
+    cal.add("calscale", "GREGORIAN")
+    cal.add("x-wr-calname", "Via Clara – Kuurytmi")
+    cal.add("x-wr-timezone", "UTC")
+
+    for title, dt in generate_moon_phase_events(now_utc):
+        ev = Event()
+        ev.add("uid", f"{token}-{int(dt.timestamp())}@via-clara")
+        ev.add("summary", title)
+        # Kuun vaihe on hetki ajassa; näytetään 15 min tapahtumana
+        ev.add("dtstart", dt)
+        ev.add("dtend", dt + timedelta(minutes=15))
+        ev.add("dtstamp", now_utc)
+        cal.add_component(ev)
+
+    return cal.to_ical()
 
 
 # -------------------------
@@ -221,25 +289,21 @@ def calendar_ics(token: str):
     conn.close()
 
     if not row or not row[0]:
+        # Sama käytös kuin ennen: estä jos token puuttuu tai inactive
         raise HTTPException(status_code=403, detail="Invalid or inactive token")
 
-    now_utc = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-    ics = f"""BEGIN:VCALENDAR
-VERSION:2.0
-PRODID:-//Via Clara//Kuurytmi Backend//FI
-CALSCALE:GREGORIAN
-METHOD:PUBLISH
-X-WR-CALNAME:Via Clara – Kuurytmi
-BEGIN:VEVENT
-DTSTAMP:{now_utc}
-UID:{token}@via-clara
-DTSTART;VALUE=DATE:20260301
-DTEND;VALUE=DATE:20260302
-SUMMARY:🌙 Via Clara Kuurytmi aktiivinen
-END:VEVENT
-END:VCALENDAR
-"""
-    return Response(content=ics, media_type="text/calendar; charset=utf-8")
+    ics_bytes = build_ics_for_token(token)
+
+    return Response(
+        content=ics_bytes,
+        media_type="text/calendar; charset=utf-8",
+        headers={
+            # auttaa selaimia ja joitain kalentericlienttejä
+            "Content-Disposition": f'inline; filename="kuurytmi-{token}.ics"',
+            # Google Calendar hakee feedin harvoin; tämä vähentää turhia hittejä
+            "Cache-Control": "public, max-age=3600",
+        },
+    )
 
 
 # -------------------------
