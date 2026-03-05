@@ -445,7 +445,14 @@ def calendar_ics(token: str):
         raise HTTPException(status_code=403, detail="Invalid or inactive token")
 
     tz_name = get_token_timezone(token)
-    ics_bytes = build_ics_for_token(token, tz_name)
+
+    try:
+        ics_bytes = build_ics_for_token(token, tz_name)
+    except Exception as e:
+        import traceback
+        print("ICS generation failed:", repr(e))
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"ICS generation failed: {e!r}")
 
     return Response(content=ics_bytes, media_type="text/calendar; charset=utf-8")
 
