@@ -283,20 +283,24 @@ async def stripe_webhook(request: Request):
             conn.commit()
             cur.close()
             conn.close()
+if event_type == "customer.subscription.updated":
+    sub = event["data"]["object"]
+    sub_id = sub.get("id")
+    status = sub.get("status")
+    cancel_at_period_end = sub.get("cancel_at_period_end")
+    canceled_at = sub.get("canceled_at")
 
-    if event_type == "customer.subscription.updated":
-        sub = event["data"]["object"]
-        sub_id = sub.get("id")
-        status = sub.get("status")
-        if sub_id and status == "canceled":
-            conn = get_connection()
-            cur = conn.cursor()
-            cur.execute(
-                "UPDATE tokens SET active = FALSE WHERE stripe_subscription_id = %s",
-                (sub_id,),
-            )
-            conn.commit()
-            cur.close()
-            conn.close()
+    # Deaktivoi jos tilaus on peruttu heti TAI merkitty päättymään
+    if sub_id and (status == "canceled" or cancel_at_period_end is True or canceled_at is not None):
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE tokens SET active = FALSE WHERE stripe_subscription_id = %s",
+            (sub_id,),
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+   
 
     return {"ok": True}
