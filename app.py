@@ -81,6 +81,29 @@ def startup():
 def health():
     return {"ok": True}
 
+@app.get("/debug/token/{token}")
+def debug_token(token: str):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT active, stripe_session_id, stripe_subscription_id, created_at FROM tokens WHERE token = %s",
+        (token,),
+    )
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="token not found")
+
+    active, sess_id, sub_id, created_at = row
+    return {
+        "token": token,
+        "active": active,
+        "stripe_session_id": sess_id,
+        "stripe_subscription_id": sub_id,
+        "created_at": str(created_at),
+    }
 
 @app.get("/", response_class=HTMLResponse)
 def home():
