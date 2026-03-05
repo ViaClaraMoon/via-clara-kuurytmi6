@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from icalendar import Calendar, Event
-from skyfield.api import load,  Loader
+from skyfield.api import Loader
 from skyfield import almanac
 
 app = FastAPI()
@@ -27,8 +27,10 @@ STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 
 BASE_URL = os.getenv("BASE_URL", "https://via-clara-kuurytmi6.onrender.com")
-
 DEFAULT_TIMEZONE = os.getenv("DEFAULT_TIMEZONE", "Europe/Helsinki")
+
+if STRIPE_SECRET_KEY:
+    stripe.api_key = STRIPE_SECRET_KEY
 
 # -------------------------
 # Skyfield (load once, cache in /tmp)
@@ -38,19 +40,12 @@ os.makedirs(SKYFIELD_DIR, exist_ok=True)
 
 _sky_loader = Loader(SKYFIELD_DIR)
 
-# These will be initialized on startup
 TS = None
 EPH = None
-
-if STRIPE_SECRET_KEY:
-    stripe.api_key = STRIPE_SECRET_KEY
-
 
 # -------------------------
 # Moon / Zodiac (emoji-only)
 # -------------------------
-# Index 0..11 corresponds to 0..360 degrees of ecliptic longitude in 30-degree slices.
-# Name stored internally (not shown), emoji used in calendar.
 ZODIAC_SIGNS = [
     ("Oinas", "🐏🔥"),
     ("Härkä", "🐂🌍"),
@@ -68,13 +63,6 @@ ZODIAC_SIGNS = [
 
 
 def plant_emoji_from_sign(sign_emoji: str) -> str:
-    """
-    Element -> plant/day emoji:
-    💧 -> 🥬 (leaf)
-    🌍 -> 🥕 (root)
-    🌬 -> 🌸 (flower)
-    🔥 -> 🍓 (fruit/seed)
-    """
     if "💧" in sign_emoji:
         return "🥬"
     if "🌍" in sign_emoji:
@@ -91,7 +79,6 @@ def fmt_hhmm(dt_local: datetime) -> str:
 
 
 def moon_sign_index_at(eph, ts, dt_utc: datetime) -> int:
-    """Return sign index 0..11 for the moon at dt_utc (UTC datetime)."""
     t = ts.from_datetime(dt_utc)
     astrometric = eph["earth"].at(t).observe(eph["moon"]).apparent()
     lon = astrometric.ecliptic_latlon()[1]
@@ -105,21 +92,22 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
       - New Moon: 🌑 ✂️⬆️ + sign/element emoji + plant emoji + time
       - Full Moon: 🌕 ✂️⬇️ + sign/element emoji + plant emoji + time
       - Moon sign ingresses: sign/element emoji + plant emoji + time
-    For ~12 months ahead, in token's timezone.
+    ~12 months ahead, token's timezone.
     """
+    # timezone for output
     try:
         tz = ZoneInfo(tz_name)
     except Exception:
         tz = ZoneInfo(DEFAULT_TIMEZONE)
         tz_name = DEFAULT_TIMEZONE
 
-    now_utc = datetime.now(timezone.utc)
-    
- ts = TS
-eph = EPH
-if ts is None or eph is None:
-    raise RuntimeError("Skyfield not initialized")
+    # skyfield preloaded objects
+    ts = TS
+    eph = EPH
+    if ts is None or eph is None:
+        raise RuntimeError("Skyfield not initialized")
 
+    now_utc = datetime.now(timezone.utc)
     t0 = ts.from_datetime(now_utc)
     t1 = ts.from_datetime(now_utc + timedelta(days=365))
 
@@ -130,16 +118,14 @@ if ts is None or eph is None:
     cal.add("x-wr-calname", "Via Clara – Kuurytmi")
     cal.add("x-wr-timezone", tz_name)
 
-    # -------------------------
     # A) New Moon + Full Moon only
-    # -------------------------
     phase_func = almanac.moon_phases(eph)
     phase_times, phase_ids = almanac.find_discrete(t0, t1, phase_func)
 
     for t, pid in zip(phase_times, phase_ids):
         pid = int(pid)
         if pid not in (0, 2):
-            continue  # only new + full
+            continue
 
         dt_utc = t.utc_datetime().replace(tzinfo=timezone.utc)
         dt_local = dt_utc.astimezone(tz)
@@ -161,15 +147,13 @@ if ts is None or eph is None:
         ev = Event()
         ev.add("uid", f"{token}-{uid_prefix}-{int(dt_utc.timestamp())}@via-clara")
         ev.add("summary", summary)
-        ev.add("description", summary)  # emoji-only
+        ev.add("description", summary)
         ev.add("dtstart", dt_local)
         ev.add("dtend", dt_local + duration)
         ev.add("dtstamp", now_utc)
         cal.add_component(ev)
 
-    # -------------------------
-    # B) Moon sign ingresses (emoji-only)
-    # -------------------------
+    # B) Moon sign ingresses
     def moon_sign_index_vector(t_skyfield):
         astrometric = eph["earth"].at(t_skyfield).observe(eph["moon"]).apparent()
         lon = astrometric.ecliptic_latlon()[1]
@@ -223,7 +207,6 @@ def init_db():
         """
     )
 
-    # schema upgrades
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS stripe_session_id TEXT;")
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT;")
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();")
@@ -247,7 +230,6 @@ def ensure_tokens_schema():
 
 
 def get_token_timezone(token: str) -> str:
-    """Return token timezone (or default)."""
     ensure_tokens_schema()
     conn = get_connection()
     cur = conn.cursor()
@@ -255,15 +237,12 @@ def get_token_timezone(token: str) -> str:
     row = cur.fetchone()
     cur.close()
     conn.close()
-
     if not row or not row[0]:
         return DEFAULT_TIMEZONE
     return row[0]
 
 
 def set_token_timezone(token: str, tz: str):
-    """Set token timezone (validate by ZoneInfo)."""
-    # validate tz
     try:
         ZoneInfo(tz)
     except Exception:
@@ -298,7 +277,6 @@ def health():
 
 @app.get("/debug/token/{token}")
 def debug_token(token: str):
-    # Debug näkyviin vain jos DEBUG=true
     if not DEBUG:
         raise HTTPException(status_code=404, detail="Not found")
 
@@ -356,10 +334,6 @@ def buy_monthly():
 
 @app.get("/success", response_class=HTMLResponse)
 def success(session_id: str):
-    """
-    Stripe ohjaa tänne muodossa:
-    /success?session_id={CHECKOUT_SESSION_ID}
-    """
     ensure_tokens_schema()
 
     if not session_id:
@@ -419,15 +393,11 @@ def success(session_id: str):
 
 @app.get("/tz", response_class=HTMLResponse)
 def tz_form(token: str):
-    """
-    Simple timezone selector for a token.
-    """
     ensure_tokens_schema()
 
-    # Verify token exists (but don't leak too much)
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT active, timezone FROM tokens WHERE token = %s", (token,))
+    cur.execute("SELECT timezone FROM tokens WHERE token = %s", (token,))
     row = cur.fetchone()
     cur.close()
     conn.close()
@@ -435,9 +405,8 @@ def tz_form(token: str):
     if not row:
         raise HTTPException(status_code=404, detail="Not found")
 
-    current_tz = row[1] or DEFAULT_TIMEZONE
+    current_tz = row[0] or DEFAULT_TIMEZONE
 
-    # Small curated list (safe + common). You can add more later.
     options = [
         "Europe/Helsinki",
         "Europe/Vienna",
@@ -475,9 +444,6 @@ def tz_form(token: str):
 
 @app.post("/tz", response_class=HTMLResponse)
 async def tz_save(request: Request):
-    """
-    Save timezone selection.
-    """
     form = await request.form()
     token = (form.get("token") or "").strip()
     tz = (form.get("timezone") or "").strip()
@@ -485,13 +451,13 @@ async def tz_save(request: Request):
     if not token or not tz:
         raise HTTPException(status_code=400, detail="Missing token or timezone")
 
-    # Ensure token exists
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("SELECT 1 FROM tokens WHERE token = %s", (token,))
     exists = cur.fetchone()
     cur.close()
     conn.close()
+
     if not exists:
         raise HTTPException(status_code=404, detail="Not found")
 
@@ -563,49 +529,36 @@ async def stripe_webhook(request: Request):
 
     event_type = event["type"]
 
-    # Maksu epäonnistui -> katkaise pääsy heti
     if event_type == "invoice.payment_failed":
         sub_id = event["data"]["object"].get("subscription")
         if sub_id:
             conn = get_connection()
             cur = conn.cursor()
-            cur.execute(
-                "UPDATE tokens SET active = FALSE WHERE stripe_subscription_id = %s",
-                (sub_id,),
-            )
+            cur.execute("UPDATE tokens SET active = FALSE WHERE stripe_subscription_id = %s", (sub_id,))
             conn.commit()
             cur.close()
             conn.close()
 
-    # Maksu onnistui -> palauta pääsy
     if event_type in ["invoice.payment_succeeded", "invoice.paid"]:
         sub_id = event["data"]["object"].get("subscription")
         if sub_id:
             conn = get_connection()
             cur = conn.cursor()
-            cur.execute(
-                "UPDATE tokens SET active = TRUE WHERE stripe_subscription_id = %s",
-                (sub_id,),
-            )
+            cur.execute("UPDATE tokens SET active = TRUE WHERE stripe_subscription_id = %s", (sub_id,))
             conn.commit()
             cur.close()
             conn.close()
 
-    # Tilaus poistettu -> katkaise
     if event_type == "customer.subscription.deleted":
         sub_id = event["data"]["object"].get("id")
         if sub_id:
             conn = get_connection()
             cur = conn.cursor()
-            cur.execute(
-                "UPDATE tokens SET active = FALSE WHERE stripe_subscription_id = %s",
-                (sub_id,),
-            )
+            cur.execute("UPDATE tokens SET active = FALSE WHERE stripe_subscription_id = %s", (sub_id,))
             conn.commit()
             cur.close()
             conn.close()
 
-    # Katkaise vasta kun oikeasti canceled (ei pelkästä cancel_at_period_end:stä)
     if event_type == "customer.subscription.updated":
         sub = event["data"]["object"]
         sub_id = sub.get("id")
@@ -615,10 +568,7 @@ async def stripe_webhook(request: Request):
         if sub_id and (status == "canceled" or canceled_at is not None):
             conn = get_connection()
             cur = conn.cursor()
-            cur.execute(
-                "UPDATE tokens SET active = FALSE WHERE stripe_subscription_id = %s",
-                (sub_id,),
-            )
+            cur.execute("UPDATE tokens SET active = FALSE WHERE stripe_subscription_id = %s", (sub_id,))
             conn.commit()
             cur.close()
             conn.close()
