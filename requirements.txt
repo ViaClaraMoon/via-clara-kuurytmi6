@@ -1,10 +1,11 @@
-skyfield==1.49
-numpy==2.1.0
-python-dateutil==2.9.0.post0
 fastapi==0.115.6
 uvicorn[standard]==0.30.6
 psycopg2-binary==2.9.9
 stripe==11.4.1
-skyfield
+
+skyfield==1.49
 skyfield-data
 icalendar
+
+numpy==2.1.0
+python-dateutil==2.9.0.post0
