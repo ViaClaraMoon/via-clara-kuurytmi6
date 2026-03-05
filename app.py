@@ -277,7 +277,21 @@ async def stripe_webhook(request: Request):
             conn.commit()
             cur.close()
             conn.close()
-
+  
+    # Maksu onnistui (uudelleen) -> palauta pääsy
+    if event_type == "invoice.payment_succeeded":
+        sub_id = event["data"]["object"].get("subscription")
+        if sub_id:
+            conn = get_connection()
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE tokens SET active = TRUE WHERE stripe_subscription_id = %s",
+                (sub_id,),
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
+            
     # Tilaus poistettu -> katkaise
     if event_type == "customer.subscription.deleted":
         sub_id = event["data"]["object"].get("id")
