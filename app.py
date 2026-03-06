@@ -1,7 +1,7 @@
 import os
 import secrets
 import time
-from datetime import date, datetime, time as dt_time, timedelta, timezone
+from datetime import datetime, time as dt_time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -159,11 +159,9 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
     today_local = datetime.now(tz).date()
     days_ahead = 365
 
-    # Local day range
     local_start = datetime.combine(today_local, dt_time(0, 0), tzinfo=tz)
     local_end = local_start + timedelta(days=days_ahead)
 
-    # Extra margin to safely catch timezone crossings
     search_start_utc = (local_start - timedelta(days=2)).astimezone(timezone.utc)
     search_end_utc = (local_end + timedelta(days=2)).astimezone(timezone.utc)
 
@@ -202,8 +200,6 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
         phase_by_date[local_day] = {
             "emoji": "🌚" if pid == 0 else "🌕",
             "time": fmt_hhmm(dt_local),
-            # Based on your latest example:
-            # full moon uses ⬆️, new moon uses ⬇️
             "arrow": "⬇️" if pid == 0 else "⬆️",
         }
 
@@ -218,7 +214,7 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
         deg = lon.degrees % 360.0
         return np.floor_divide(deg, 30).astype(int)
 
-    moon_sign_index_vector.step_days = 0.5  # required by Skyfield
+    moon_sign_index_vector.step_days = 0.5
 
     ingress_times, ingress_idxs = almanac.find_discrete(t0, t1, moon_sign_index_vector)
 
@@ -241,7 +237,6 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
     for i in range(days_ahead):
         local_day = today_local + timedelta(days=i)
 
-        # If sign changes that day, show the sign that STARTS that day.
         ingress = ingress_by_date.get(local_day)
         if ingress:
             sign_idx = ingress["idx"]
@@ -253,7 +248,6 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
             sign_time = None
 
         sign_emoji, element_emoji, plant_emoji = sign_parts_from_index(sign_idx)
-
         phase = phase_by_date.get(local_day)
 
         if phase:
@@ -511,7 +505,7 @@ def success(session_id: str):
                 onclick="copyCalendarLink()"
                 style="padding:10px 14px;font-size:14px;cursor:pointer;"
             >
-                Kopioi tämä linkki ja lisää se omaan kalenteriisi
+                Kopioi kalenterilinkki
             </button>
         </p>
 
