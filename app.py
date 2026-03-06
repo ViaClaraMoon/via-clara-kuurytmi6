@@ -701,48 +701,57 @@ async def stripe_webhook(request: Request):
 
     event_type = event["type"]
 
-    if event_type == "invoice.payment_failed":
-        sub_id = event["data"]["object"].get("subscription")
-        if sub_id:
-            conn = get_connection()
-            cur = conn.cursor()
-            cur.execute("UPDATE tokens SET active = FALSE WHERE stripe_subscription_id = %s", (sub_id,))
-            conn.commit()
-            cur.close()
-            conn.close()
-
-    if event_type in ["invoice.payment_succeeded", "invoice.paid"]:
-        sub_id = event["data"]["object"].get("subscription")
-        if sub_id:
-            conn = get_connection()
-            cur = conn.cursor()
-            cur.execute("UPDATE tokens SET active = TRUE WHERE stripe_subscription_id = %s", (sub_id,))
-            conn.commit()
-            cur.close()
-            conn.close()
-
-    if event_type == "customer.subscription.deleted":
-        sub_id = event["data"]["object"].get("id")
-        if sub_id:
-            conn = get_connection()
-            cur = conn.cursor()
-            cur.execute("UPDATE tokens SET active = FALSE WHERE stripe_subscription_id = %s", (sub_id,))
-            conn.commit()
-            cur.close()
-            conn.close()
-
     if event_type == "customer.subscription.updated":
         sub = event["data"]["object"]
         sub_id = sub.get("id")
         status = sub.get("status")
-        canceled_at = sub.get("canceled_at")
 
-        if sub_id and (status == "canceled" or canceled_at is not None):
+        # Active until billing period actually ends.
+        # This supports:
+        # - cancel immediately -> status becomes canceled -> active FALSE
+        # - cancel at period end -> status usually remains active -> active TRUE
+        if sub_id:
+            is_active = status in ("active", "trialing")
             conn = get_connection()
             cur = conn.cursor()
-            cur.execute("UPDATE tokens SET active = FALSE WHERE stripe_subscription_id = %s", (sub_id,))
+            cur.execute(
+                "UPDATE tokens SET active = %s WHERE stripe_subscription_id = %s",
+                (is_active, sub_id),
+            )
             conn.commit()
             cur.close()
             conn.close()
+
+    elif event_type == "customer.subscription.deleted":
+        sub_id = event["data"]["object"].get("id")
+        if sub_id:
+            conn = get_connection()
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE tokens SET active = FALSE WHERE stripe_subscription_id = %s",
+                (sub_id,),
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
+
+    elif event_type in ["invoice.payment_succeeded", "invoice.paid"]:
+        sub_id = event["data"]["object"].get("subscription")
+        if sub_id:
+            conn = get_connection()
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE tokens SET active = TRUE WHERE stripe_subscription_id = %s",
+                (sub_id,),
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
+
+    elif event_type == "invoice.payment_failed":
+        # Intentionally do not disable access immediately here.
+        # Stripe may still retry payment, and subscription status updates
+        # are the more reliable source of truth.
+        pass
 
     return {"ok": True}
