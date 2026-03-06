@@ -1,7 +1,7 @@
 import os
 import secrets
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time as dt_time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -51,33 +51,33 @@ ICS_CACHE = {}
 ICS_CACHE_TTL_SECONDS = 3600  # 1 hour
 
 # -------------------------
-# Zodiac emojis (emoji-only)
+# Zodiac data
+# sign emoji + element emoji
 # -------------------------
 ZODIAC_SIGNS = [
-    ("Oinas", "🐏🔥"),
-    ("Härkä", "🐂🌍"),
-    ("Kaksoset", "👯🌬"),
-    ("Rapu", "🦀💧"),
-    ("Leijona", "🦁🔥"),
-    ("Neitsyt", "👧🌍"),
-    ("Vaaka", "⚖️🌬"),
-    ("Skorpioni", "🦂💧"),
-    ("Jousimies", "🏹🔥"),
-    ("Kauris", "🐐🌍"),
-    ("Vesimies", "🏺🌬"),
-    ("Kalat", "🐟💧"),
+    ("Oinas", "🐏", "🔥"),
+    ("Härkä", "🐂", "🌍"),
+    ("Kaksoset", "👯", "🌬"),
+    ("Rapu", "🦀", "💧"),
+    ("Leijona", "🦁", "🔥"),
+    ("Neitsyt", "👧", "🌍"),
+    ("Vaaka", "⚖️", "🌬"),
+    ("Skorpioni", "🦂", "💧"),
+    ("Jousimies", "🏹", "🔥"),
+    ("Kauris", "🐐", "🌍"),
+    ("Vesimies", "🏺", "🌬"),
+    ("Kalat", "🐟", "💧"),
 ]
 
 
-def plant_emoji_from_sign(sign_emoji: str) -> str:
-    # element -> plant/day emoji
-    if "💧" in sign_emoji:
+def plant_emoji_from_element(element_emoji: str) -> str:
+    if element_emoji == "💧":
         return "🥬"  # leaf
-    if "🌍" in sign_emoji:
+    if element_emoji == "🌍":
         return "🥕"  # root
-    if "🌬" in sign_emoji:
+    if element_emoji == "🌬":
         return "🌸"  # flower
-    if "🔥" in sign_emoji:
+    if element_emoji == "🔥":
         return "🍓"  # fruit/seed
     return "🌿"
 
@@ -95,104 +95,10 @@ def moon_sign_index_at(eph, ts, dt_utc: datetime) -> int:
     return int(deg // 30)
 
 
-def build_ics_for_token(token: str, tz_name: str) -> bytes:
-    """
-    Emoji-only calendar for ~12 months:
-      - 🌑 New Moon: ✂️⬆️ + sign+element + plant + HH:MM
-      - 🌕 Full Moon: ✂️⬇️ + sign+element + plant + HH:MM
-      - Moon sign ingresses: sign+element + plant + HH:MM
-    """
-    try:
-        tz = ZoneInfo(tz_name)
-    except Exception:
-        tz = ZoneInfo(DEFAULT_TIMEZONE)
-        tz_name = DEFAULT_TIMEZONE
-
-    ts = TS
-    eph = EPH
-    if ts is None or eph is None:
-        raise RuntimeError("Skyfield not initialized")
-
-    now_utc = datetime.now(timezone.utc)
-    t0 = ts.from_datetime(now_utc)
-    t1 = ts.from_datetime(now_utc + timedelta(days=365))
-
-    cal = Calendar()
-    cal.add("prodid", "-//Via Clara//Kuurytmi Backend//FI")
-    cal.add("version", "2.0")
-    cal.add("calscale", "GREGORIAN")
-    cal.add("x-wr-calname", "Via Clara – Kuurytmi")
-    cal.add("x-wr-timezone", tz_name)
-
-    # -------------------------
-    # A) New moon + full moon only
-    # -------------------------
-    phase_func = almanac.moon_phases(eph)
-    phase_times, phase_ids = almanac.find_discrete(t0, t1, phase_func)
-
-    for t, pid in zip(phase_times, phase_ids):
-        pid = int(pid)
-        if pid not in (0, 2):
-            continue
-
-        dt_utc = t.utc_datetime().replace(tzinfo=timezone.utc)
-        dt_local = dt_utc.astimezone(tz)
-        time_str = fmt_hhmm(dt_local)
-
-        idx = moon_sign_index_at(eph, ts, dt_utc)
-        _, sign_emoji = ZODIAC_SIGNS[idx]
-        plant = plant_emoji_from_sign(sign_emoji)
-
-        if pid == 0:
-            summary = f"🌑 ✂️⬆️ {sign_emoji} {plant} {time_str}"
-            uid_prefix = "new"
-            duration = timedelta(minutes=15)
-        else:
-            summary = f"🌕 ✂️⬇️ {sign_emoji} {plant} {time_str}"
-            uid_prefix = "full"
-            duration = timedelta(minutes=15)
-
-        ev = Event()
-        ev.add("uid", f"{token}-{uid_prefix}-{int(dt_utc.timestamp())}@via-clara")
-        ev.add("summary", summary)
-        ev.add("description", summary)
-        ev.add("dtstart", dt_local)
-        ev.add("dtend", dt_local + duration)
-        ev.add("dtstamp", now_utc)
-        cal.add_component(ev)
-
-    # -------------------------
-    # B) Moon sign ingresses
-    # -------------------------
-    def moon_sign_index_vector(t_skyfield):
-        astrometric = eph["earth"].at(t_skyfield).observe(eph["moon"]).apparent()
-        lon = astrometric.ecliptic_latlon()[1]
-        deg = lon.degrees % 360.0
-        return np.floor_divide(deg, 30).astype(int)
-
-    moon_sign_index_vector.step_days = 0.5  # 12h steps
-
-    ingress_times, ingress_idxs = almanac.find_discrete(t0, t1, moon_sign_index_vector)
-
-    for t, idx in zip(ingress_times, ingress_idxs):
-        dt_utc = t.utc_datetime().replace(tzinfo=timezone.utc)
-        dt_local = dt_utc.astimezone(tz)
-        time_str = fmt_hhmm(dt_local)
-
-        _, sign_emoji = ZODIAC_SIGNS[int(idx)]
-        plant = plant_emoji_from_sign(sign_emoji)
-        summary = f"{sign_emoji} {plant} {time_str}"
-
-        ev = Event()
-        ev.add("uid", f"{token}-ingress-{int(dt_utc.timestamp())}@via-clara")
-        ev.add("summary", summary)
-        ev.add("description", summary)
-        ev.add("dtstart", dt_local)
-        ev.add("dtend", dt_local + timedelta(minutes=10))
-        ev.add("dtstamp", now_utc)
-        cal.add_component(ev)
-
-    return cal.to_ical()
+def sign_parts_from_index(idx: int):
+    _, sign_emoji, element_emoji = ZODIAC_SIGNS[int(idx)]
+    plant_emoji = plant_emoji_from_element(element_emoji)
+    return sign_emoji, element_emoji, plant_emoji
 
 
 def get_cached_ics(token: str, tz_name: str):
@@ -221,6 +127,162 @@ def invalidate_token_cache(token: str):
     keys_to_delete = [k for k in ICS_CACHE if k.startswith(f"{token}|")]
     for k in keys_to_delete:
         ICS_CACHE.pop(k, None)
+
+
+def build_ics_for_token(token: str, tz_name: str) -> bytes:
+    """
+    Build daily all-day calendar for ~12 months.
+
+    Rules:
+    - Every day gets exactly one event.
+    - Normal day:               🦁🔥 🍓
+    - Sign-change day:          🦁 17:34 🔥 🍓
+    - Full moon:                🌕 12:34 ⬆️ 🦁🔥 🍓
+    - Full moon + sign change:  🌕 12:34 ⬆️ 🦁 18:57 🔥 🍓
+    - New moon:                 🌚 08:12 ⬇️ 🐂🌍 🥕
+
+    Important:
+    - If the sign changes during the day, show the sign that STARTS that day.
+    """
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo(DEFAULT_TIMEZONE)
+        tz_name = DEFAULT_TIMEZONE
+
+    ts = TS
+    eph = EPH
+    if ts is None or eph is None:
+        raise RuntimeError("Skyfield not initialized")
+
+    now_utc = datetime.now(timezone.utc)
+    today_local = datetime.now(tz).date()
+    days_ahead = 365
+
+    # Local day range
+    local_start = datetime.combine(today_local, dt_time(0, 0), tzinfo=tz)
+    local_end = local_start + timedelta(days=days_ahead)
+
+    # Extra margin to safely catch timezone crossings
+    search_start_utc = (local_start - timedelta(days=2)).astimezone(timezone.utc)
+    search_end_utc = (local_end + timedelta(days=2)).astimezone(timezone.utc)
+
+    t0 = ts.from_datetime(search_start_utc)
+    t1 = ts.from_datetime(search_end_utc)
+
+    cal = Calendar()
+    cal.add("prodid", "-//Via Clara//Kuurytmi Backend//FI")
+    cal.add("version", "2.0")
+    cal.add("calscale", "GREGORIAN")
+    cal.add("x-wr-calname", "Via Clara – Kuurytmi")
+    cal.add("x-wr-timezone", tz_name)
+
+    valid_dates = {today_local + timedelta(days=i) for i in range(days_ahead)}
+
+    # -------------------------
+    # A) Moon phases by local date
+    # -------------------------
+    phase_by_date = {}
+
+    phase_func = almanac.moon_phases(eph)
+    phase_times, phase_ids = almanac.find_discrete(t0, t1, phase_func)
+
+    for t, pid in zip(phase_times, phase_ids):
+        pid = int(pid)
+        if pid not in (0, 2):  # 0=new, 2=full
+            continue
+
+        dt_utc = t.utc_datetime().replace(tzinfo=timezone.utc)
+        dt_local = dt_utc.astimezone(tz)
+        local_day = dt_local.date()
+
+        if local_day not in valid_dates:
+            continue
+
+        phase_by_date[local_day] = {
+            "emoji": "🌚" if pid == 0 else "🌕",
+            "time": fmt_hhmm(dt_local),
+            # Based on your latest example:
+            # full moon uses ⬆️, new moon uses ⬇️
+            "arrow": "⬇️" if pid == 0 else "⬆️",
+        }
+
+    # -------------------------
+    # B) Moon sign ingresses by local date
+    # -------------------------
+    ingress_by_date = {}
+
+    def moon_sign_index_vector(t_skyfield):
+        astrometric = eph["earth"].at(t_skyfield).observe(eph["moon"]).apparent()
+        lon = astrometric.ecliptic_latlon()[1]
+        deg = lon.degrees % 360.0
+        return np.floor_divide(deg, 30).astype(int)
+
+    moon_sign_index_vector.step_days = 0.5  # required by Skyfield
+
+    ingress_times, ingress_idxs = almanac.find_discrete(t0, t1, moon_sign_index_vector)
+
+    for t, idx in zip(ingress_times, ingress_idxs):
+        dt_utc = t.utc_datetime().replace(tzinfo=timezone.utc)
+        dt_local = dt_utc.astimezone(tz)
+        local_day = dt_local.date()
+
+        if local_day not in valid_dates:
+            continue
+
+        ingress_by_date[local_day] = {
+            "idx": int(idx),
+            "time": fmt_hhmm(dt_local),
+        }
+
+    # -------------------------
+    # C) Daily events
+    # -------------------------
+    for i in range(days_ahead):
+        local_day = today_local + timedelta(days=i)
+
+        # If sign changes that day, show the sign that STARTS that day.
+        ingress = ingress_by_date.get(local_day)
+        if ingress:
+            sign_idx = ingress["idx"]
+            sign_time = ingress["time"]
+        else:
+            local_noon = datetime.combine(local_day, dt_time(12, 0), tzinfo=tz)
+            dt_utc = local_noon.astimezone(timezone.utc)
+            sign_idx = moon_sign_index_at(eph, ts, dt_utc)
+            sign_time = None
+
+        sign_emoji, element_emoji, plant_emoji = sign_parts_from_index(sign_idx)
+
+        phase = phase_by_date.get(local_day)
+
+        if phase:
+            if sign_time:
+                summary = (
+                    f'{phase["emoji"]} {phase["time"]} {phase["arrow"]} '
+                    f'{sign_emoji} {sign_time} {element_emoji} {plant_emoji}'
+                )
+            else:
+                summary = (
+                    f'{phase["emoji"]} {phase["time"]} {phase["arrow"]} '
+                    f'{sign_emoji}{element_emoji} {plant_emoji}'
+                )
+        else:
+            if sign_time:
+                summary = f"{sign_emoji} {sign_time} {element_emoji} {plant_emoji}"
+            else:
+                summary = f"{sign_emoji}{element_emoji} {plant_emoji}"
+
+        ev = Event()
+        ev.add("uid", f"{token}-{local_day.isoformat()}@via-clara")
+        ev.add("summary", summary)
+        ev.add("description", summary)
+        ev.add("dtstart", local_day)
+        ev.add("dtend", local_day + timedelta(days=1))
+        ev.add("dtstamp", now_utc)
+        cal.add_component(ev)
+
+    return cal.to_ical()
 
 
 # -------------------------
@@ -431,10 +493,57 @@ def success(session_id: str):
     return HTMLResponse(
         f"""
         <h2>Kiitos! Tilauksesi on käsitelty ✅</h2>
-        <p><b>Kalenterilinkkisi:</b></p>
-        <p><a href="{cal_url}">{cal_url}</a></p>
+
+        <p><b>Henkilökohtainen kalenterilinkkisi:</b></p>
+
+        <p>
+            <input
+                id="calendar-link"
+                type="text"
+                value="{cal_url}"
+                readonly
+                style="width:100%;max-width:720px;padding:10px;font-size:14px;"
+            />
+        </p>
+
+        <p>
+            <button
+                onclick="copyCalendarLink()"
+                style="padding:10px 14px;font-size:14px;cursor:pointer;"
+            >
+                Kopioi tämä linkki ja lisää se omaan kalenteriisi
+            </button>
+        </p>
+
+        <p id="copy-status" style="font-weight:bold;"></p>
+
+        <p>
+            Kopioi tämä linkki ja lisää se omaan kalenteriisi URL-osoitteena.
+            Tämä on henkilökohtainen kalenterisyötteesi.
+        </p>
+
+        <p><b>Google Kalenteri:</b> Asetukset → Lisää kalenteri → URL-osoitteesta → liitä linkki</p>
+        <p><b>Apple Calendar:</b> File → New Calendar Subscription → liitä linkki</p>
+        <p><b>Outlook:</b> Add calendar → Subscribe from web → liitä linkki</p>
+
         <p><a href="{tz_url}">Vaihda aikavyöhyke</a></p>
-        <p><b>Google Kalenteri:</b> Asetukset → Lisää kalenteri → URL → liitä linkki</p>
+
+        <script>
+        async function copyCalendarLink() {{
+            const input = document.getElementById("calendar-link");
+            const status = document.getElementById("copy-status");
+
+            try {{
+                await navigator.clipboard.writeText(input.value);
+                status.textContent = "Kalenterilinkki kopioitu ✅";
+            }} catch (err) {{
+                input.select();
+                input.setSelectionRange(0, 99999);
+                document.execCommand("copy");
+                status.textContent = "Kalenterilinkki kopioitu ✅";
+            }}
+        }}
+        </script>
         """
     )
 
