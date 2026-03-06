@@ -1,5 +1,6 @@
 import os
 import secrets
+import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -42,6 +43,12 @@ os.makedirs(SKYFIELD_DIR, exist_ok=True)
 _sky_loader = Loader(SKYFIELD_DIR)
 TS = None
 EPH = None
+
+# -------------------------
+# In-memory ICS cache
+# -------------------------
+ICS_CACHE = {}
+ICS_CACHE_TTL_SECONDS = 3600  # 1 hour
 
 # -------------------------
 # Zodiac emojis (emoji-only)
@@ -95,7 +102,6 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
       - 🌕 Full Moon: ✂️⬇️ + sign+element + plant + HH:MM
       - Moon sign ingresses: sign+element + plant + HH:MM
     """
-    # timezone for output
     try:
         tz = ZoneInfo(tz_name)
     except Exception:
@@ -126,7 +132,7 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
 
     for t, pid in zip(phase_times, phase_ids):
         pid = int(pid)
-        if pid not in (0, 2):  # 0=new, 2=full
+        if pid not in (0, 2):
             continue
 
         dt_utc = t.utc_datetime().replace(tzinfo=timezone.utc)
@@ -164,7 +170,6 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
         deg = lon.degrees % 360.0
         return np.floor_divide(deg, 30).astype(int)
 
-    # IMPORTANT: Skyfield requires step_days on custom functions
     moon_sign_index_vector.step_days = 0.5  # 12h steps
 
     ingress_times, ingress_idxs = almanac.find_discrete(t0, t1, moon_sign_index_vector)
@@ -188,6 +193,34 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
         cal.add_component(ev)
 
     return cal.to_ical()
+
+
+def get_cached_ics(token: str, tz_name: str):
+    key = f"{token}|{tz_name}"
+    item = ICS_CACHE.get(key)
+    if not item:
+        return None
+
+    created_at = item["created_at"]
+    if time.time() - created_at > ICS_CACHE_TTL_SECONDS:
+        ICS_CACHE.pop(key, None)
+        return None
+
+    return item["content"]
+
+
+def set_cached_ics(token: str, tz_name: str, content: bytes):
+    key = f"{token}|{tz_name}"
+    ICS_CACHE[key] = {
+        "created_at": time.time(),
+        "content": content,
+    }
+
+
+def invalidate_token_cache(token: str):
+    keys_to_delete = [k for k in ICS_CACHE if k.startswith(f"{token}|")]
+    for k in keys_to_delete:
+        ICS_CACHE.pop(k, None)
 
 
 # -------------------------
@@ -471,10 +504,12 @@ async def tz_save(request: Request):
     exists = cur.fetchone()
     cur.close()
     conn.close()
+
     if not exists:
         raise HTTPException(status_code=404, detail="Not found")
 
     set_token_timezone(token, tz)
+    invalidate_token_cache(token)
 
     cal_url = f"{BASE_URL}/calendar/{token}.ics"
     return HTMLResponse(
@@ -509,11 +544,22 @@ def calendar_ics(token: str):
 
     tz_name = get_token_timezone(token)
 
-    # If something fails here, we return a clean 500.
+    cached = get_cached_ics(token, tz_name)
+    if cached is not None:
+        return Response(
+            content=cached,
+            media_type="text/calendar; charset=utf-8",
+            headers={
+                "Content-Disposition": f'inline; filename="kuurytmi-{token}.ics"',
+                "Cache-Control": "public, max-age=3600",
+                "X-Cache": "HIT",
+            },
+        )
+
     try:
         ics_bytes = build_ics_for_token(token, tz_name)
+        set_cached_ics(token, tz_name, ics_bytes)
     except Exception as e:
-        # log for Render
         import traceback
         print("ICS generation failed:", repr(e))
         print(traceback.format_exc())
@@ -525,6 +571,7 @@ def calendar_ics(token: str):
         headers={
             "Content-Disposition": f'inline; filename="kuurytmi-{token}.ics"',
             "Cache-Control": "public, max-age=3600",
+            "X-Cache": "MISS",
         },
     )
 
