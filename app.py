@@ -52,7 +52,6 @@ ICS_CACHE_TTL_SECONDS = 3600  # 1 hour
 
 # -------------------------
 # Zodiac data
-# sign emoji + element emoji
 # -------------------------
 ZODIAC_SIGNS = [
     ("Oinas", "🐏", "🔥"),
@@ -72,13 +71,13 @@ ZODIAC_SIGNS = [
 
 def plant_emoji_from_element(element_emoji: str) -> str:
     if element_emoji == "💧":
-        return "🥬"  # leaf
+        return "🥬"
     if element_emoji == "🌍":
-        return "🥕"  # root
+        return "🥕"
     if element_emoji == "🌬":
-        return "🌸"  # flower
+        return "🌸"
     if element_emoji == "🔥":
-        return "🍓"  # fruit/seed
+        return "🍓"
     return "🌿"
 
 
@@ -87,7 +86,6 @@ def fmt_hhmm(dt_local: datetime) -> str:
 
 
 def moon_sign_index_at(eph, ts, dt_utc: datetime) -> int:
-    """Return sign index 0..11 for the moon at dt_utc (UTC datetime)."""
     t = ts.from_datetime(dt_utc)
     astrometric = eph["earth"].at(t).observe(eph["moon"]).apparent()
     lon = astrometric.ecliptic_latlon()[1]
@@ -130,20 +128,6 @@ def invalidate_token_cache(token: str):
 
 
 def build_ics_for_token(token: str, tz_name: str) -> bytes:
-    """
-    Build daily all-day calendar for ~12 months.
-
-    Rules:
-    - Every day gets exactly one event.
-    - Normal day:               🦁🔥 🍓
-    - Sign-change day:          🦁 17:34 🔥 🍓
-    - Full moon:                🌕 12:34 ⬆️ 🦁🔥 🍓
-    - Full moon + sign change:  🌕 12:34 ⬆️ 🦁 18:57 🔥 🍓
-    - New moon:                 🌚 08:12 ⬇️ 🐂🌍 🥕
-
-    Important:
-    - If the sign changes during the day, show the sign that STARTS that day.
-    """
     try:
         tz = ZoneInfo(tz_name)
     except Exception:
@@ -177,9 +161,6 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
 
     valid_dates = {today_local + timedelta(days=i) for i in range(days_ahead)}
 
-    # -------------------------
-    # A) Moon phases by local date
-    # -------------------------
     phase_by_date = {}
 
     phase_func = almanac.moon_phases(eph)
@@ -187,7 +168,7 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
 
     for t, pid in zip(phase_times, phase_ids):
         pid = int(pid)
-        if pid not in (0, 2):  # 0=new, 2=full
+        if pid not in (0, 2):
             continue
 
         dt_utc = t.utc_datetime().replace(tzinfo=timezone.utc)
@@ -203,9 +184,6 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
             "arrow": "⬇️" if pid == 0 else "⬆️",
         }
 
-    # -------------------------
-    # B) Moon sign ingresses by local date
-    # -------------------------
     ingress_by_date = {}
 
     def moon_sign_index_vector(t_skyfield):
@@ -231,9 +209,6 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
             "time": fmt_hhmm(dt_local),
         }
 
-    # -------------------------
-    # C) Daily events
-    # -------------------------
     for i in range(days_ahead):
         local_day = today_local + timedelta(days=i)
 
@@ -304,6 +279,7 @@ def init_db():
 
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS stripe_session_id TEXT;")
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT;")
+    cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;")
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();")
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS timezone TEXT;")
 
@@ -317,6 +293,7 @@ def ensure_tokens_schema():
     cur = conn.cursor()
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS stripe_session_id TEXT;")
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT;")
+    cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;")
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();")
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS timezone TEXT;")
     conn.commit()
@@ -377,7 +354,7 @@ def debug_token(token: str):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "SELECT active, stripe_session_id, stripe_subscription_id, created_at, timezone "
+        "SELECT active, stripe_session_id, stripe_subscription_id, stripe_customer_id, created_at, timezone "
         "FROM tokens WHERE token = %s",
         (token,),
     )
@@ -388,12 +365,13 @@ def debug_token(token: str):
     if not row:
         raise HTTPException(status_code=404, detail="token not found")
 
-    active, sess_id, sub_id, created_at, tz = row
+    active, sess_id, sub_id, customer_id, created_at, tz = row
     return {
         "token": token,
         "active": active,
         "stripe_session_id": sess_id,
         "stripe_subscription_id": sub_id,
+        "stripe_customer_id": customer_id,
         "created_at": str(created_at),
         "timezone": tz or DEFAULT_TIMEZONE,
     }
@@ -452,6 +430,7 @@ def success(session_id: str):
         session = stripe.checkout.Session.retrieve(session_id, expand=["subscription"])
         subscription = session.get("subscription")
         subscription_id = subscription.get("id") if isinstance(subscription, dict) else subscription
+        customer_id = session.get("customer")
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid session_id")
 
@@ -465,16 +444,24 @@ def success(session_id: str):
     if row:
         token = row[0]
         cur.execute(
-            "UPDATE tokens SET stripe_subscription_id = COALESCE(stripe_subscription_id, %s) "
-            "WHERE stripe_session_id = %s",
-            (subscription_id, session_id),
+            """
+            UPDATE tokens
+            SET stripe_subscription_id = COALESCE(stripe_subscription_id, %s),
+                stripe_customer_id = COALESCE(stripe_customer_id, %s)
+            WHERE stripe_session_id = %s
+            """,
+            (subscription_id, customer_id, session_id),
         )
         conn.commit()
     else:
         cur.execute(
-            "INSERT INTO tokens (token, active, stripe_session_id, stripe_subscription_id, timezone) "
-            "VALUES (%s, TRUE, %s, %s, %s)",
-            (token, session_id, subscription_id, DEFAULT_TIMEZONE),
+            """
+            INSERT INTO tokens (
+                token, active, stripe_session_id, stripe_subscription_id, stripe_customer_id, timezone
+            )
+            VALUES (%s, TRUE, %s, %s, %s, %s)
+            """,
+            (token, session_id, subscription_id, customer_id, DEFAULT_TIMEZONE),
         )
         conn.commit()
 
@@ -483,6 +470,7 @@ def success(session_id: str):
 
     cal_url = f"{BASE_URL}/calendar/{token}.ics"
     tz_url = f"{BASE_URL}/tz?token={token}"
+    portal_url = f"{BASE_URL}/customer-portal?token={token}"
 
     return HTMLResponse(
         f"""
@@ -503,10 +491,17 @@ def success(session_id: str):
         <p>
             <button
                 onclick="copyCalendarLink()"
-                style="padding:10px 14px;font-size:14px;cursor:pointer;"
+                style="padding:10px 14px;font-size:14px;cursor:pointer;margin-right:8px;"
             >
                 Kopioi kalenterilinkki
             </button>
+
+            <a
+                href="{portal_url}"
+                style="display:inline-block;padding:10px 14px;font-size:14px;text-decoration:none;border:1px solid #ccc;"
+            >
+                Hallitse tilaustani
+            </a>
         </p>
 
         <p id="copy-status" style="font-weight:bold;"></p>
@@ -540,6 +535,31 @@ def success(session_id: str):
         </script>
         """
     )
+
+
+@app.get("/customer-portal")
+def customer_portal(token: str):
+    ensure_tokens_schema()
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT stripe_customer_id FROM tokens WHERE token = %s",
+        (token,),
+    )
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if not row or not row[0]:
+        raise HTTPException(status_code=404, detail="Customer not found")
+
+    portal_session = stripe.billing_portal.Session.create(
+        customer=row[0],
+        return_url=f"{BASE_URL}/",
+    )
+
+    return RedirectResponse(portal_session.url, status_code=303)
 
 
 @app.get("/tz", response_class=HTMLResponse)
@@ -706,10 +726,6 @@ async def stripe_webhook(request: Request):
         sub_id = sub.get("id")
         status = sub.get("status")
 
-        # Active until billing period actually ends.
-        # This supports:
-        # - cancel immediately -> status becomes canceled -> active FALSE
-        # - cancel at period end -> status usually remains active -> active TRUE
         if sub_id:
             is_active = status in ("active", "trialing")
             conn = get_connection()
@@ -749,9 +765,6 @@ async def stripe_webhook(request: Request):
             conn.close()
 
     elif event_type == "invoice.payment_failed":
-        # Intentionally do not disable access immediately here.
-        # Stripe may still retry payment, and subscription status updates
-        # are the more reliable source of truth.
         pass
 
     return {"ok": True}
