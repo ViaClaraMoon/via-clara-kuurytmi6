@@ -127,6 +127,18 @@ def invalidate_token_cache(token: str):
         ICS_CACHE.pop(k, None)
 
 
+def set_token_active_by_subscription_id(subscription_id: str, is_active: bool):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE tokens SET active = %s WHERE stripe_subscription_id = %s",
+        (is_active, subscription_id),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
 def build_ics_for_token(token: str, tz_name: str) -> bytes:
     try:
         tz = ZoneInfo(tz_name)
@@ -727,44 +739,27 @@ async def stripe_webhook(request: Request):
         status = sub.get("status")
 
         if sub_id:
-            is_active = status in ("active", "trialing")
-            conn = get_connection()
-            cur = conn.cursor()
-            cur.execute(
-                "UPDATE tokens SET active = %s WHERE stripe_subscription_id = %s",
-                (is_active, sub_id),
-            )
-            conn.commit()
-            cur.close()
-            conn.close()
+            # Tärkeä logiikka:
+            # - cancel_at_period_end saa jäädä aktiiviseksi nykyisen kauden loppuun asti
+            # - payment_failed ei saa sulkea käyttöä heti
+            # Suljetaan käyttö vain jos tilaus on oikeasti päättynyt / menetetty.
+            if status in ("canceled", "unpaid", "incomplete_expired"):
+                set_token_active_by_subscription_id(sub_id, False)
+            elif status in ("active", "trialing", "past_due", "incomplete"):
+                set_token_active_by_subscription_id(sub_id, True)
 
     elif event_type == "customer.subscription.deleted":
         sub_id = event["data"]["object"].get("id")
         if sub_id:
-            conn = get_connection()
-            cur = conn.cursor()
-            cur.execute(
-                "UPDATE tokens SET active = FALSE WHERE stripe_subscription_id = %s",
-                (sub_id,),
-            )
-            conn.commit()
-            cur.close()
-            conn.close()
+            set_token_active_by_subscription_id(sub_id, False)
 
-    elif event_type in ["invoice.payment_succeeded", "invoice.paid"]:
+    elif event_type in ("invoice.payment_succeeded", "invoice.paid"):
         sub_id = event["data"]["object"].get("subscription")
         if sub_id:
-            conn = get_connection()
-            cur = conn.cursor()
-            cur.execute(
-                "UPDATE tokens SET active = TRUE WHERE stripe_subscription_id = %s",
-                (sub_id,),
-            )
-            conn.commit()
-            cur.close()
-            conn.close()
+            set_token_active_by_subscription_id(sub_id, True)
 
     elif event_type == "invoice.payment_failed":
+        # Ei suljeta käyttöä heti epäonnistuneesta maksusta.
         pass
 
     return {"ok": True}
