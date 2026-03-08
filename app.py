@@ -1,3 +1,5 @@
+import html as py_html
+import logging
 import os
 import secrets
 import time
@@ -6,15 +8,16 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import psycopg2
+import resend
 import stripe
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-
 from icalendar import Calendar, Event
-from skyfield.api import Loader
 from skyfield import almanac
+from skyfield.api import Loader
 
 app = FastAPI()
+logger = logging.getLogger(__name__)
 
 # -------------------------
 # Environment
@@ -26,6 +29,9 @@ STRIPE_PRICE_ID_MONTHLY = os.getenv("STRIPE_PRICE_ID_MONTHLY")
 STRIPE_PRICE_ID_YEARLY = os.getenv("STRIPE_PRICE_ID_YEARLY")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
 
+RESEND_API_KEY = os.getenv("RESEND_API_KEY")
+EMAIL_FROM = os.getenv("EMAIL_FROM", "Via Clara <noreply@mail.viaclara.fi>")
+
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 
 BASE_URL = os.getenv("BASE_URL", "https://via-clara-kuurytmi6.onrender.com")
@@ -33,6 +39,9 @@ DEFAULT_TIMEZONE = os.getenv("DEFAULT_TIMEZONE", "Europe/Helsinki")
 
 if STRIPE_SECRET_KEY:
     stripe.api_key = STRIPE_SECRET_KEY
+
+if RESEND_API_KEY:
+    resend.api_key = RESEND_API_KEY
 
 # -------------------------
 # Skyfield preload (cache in /tmp)
@@ -267,6 +276,95 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
 
 
 # -------------------------
+# Email helpers
+# -------------------------
+def build_calendar_email_html(calendar_url: str, tz_url: str, portal_url: str) -> str:
+    calendar_url_esc = py_html.escape(calendar_url, quote=True)
+    tz_url_esc = py_html.escape(tz_url, quote=True)
+    portal_url_esc = py_html.escape(portal_url, quote=True)
+
+    return f"""
+    <html>
+      <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #222;">
+        <h2>Kiitos tilauksestasi – Via Clara Kuurytmi</h2>
+
+        <p>Tässä henkilökohtainen kalenterilinkkisi:</p>
+
+        <p>
+          <a href="{calendar_url_esc}">{calendar_url_esc}</a>
+        </p>
+
+        <p><strong>Lisää kalenteriin näin:</strong></p>
+
+        <ul>
+          <li><strong>Google Kalenteri:</strong> Asetukset → Lisää kalenteri → URL-osoitteesta → liitä linkki</li>
+          <li><strong>Apple Calendar:</strong> File → New Calendar Subscription → liitä linkki</li>
+          <li><strong>Outlook:</strong> Add calendar → Subscribe from web → liitä linkki</li>
+        </ul>
+
+        <p>
+          <strong>Vaihda aikavyöhyke:</strong><br>
+          <a href="{tz_url_esc}">{tz_url_esc}</a>
+        </p>
+
+        <p>
+          <strong>Hallitse tilaustasi:</strong><br>
+          <a href="{portal_url_esc}">{portal_url_esc}</a>
+        </p>
+
+        <p>
+          Tallenna tämä viesti, koska kalenterilinkki on henkilökohtainen.
+        </p>
+
+        <p>Lämpimin terveisin,<br>Via Clara</p>
+      </body>
+    </html>
+    """
+
+
+def build_calendar_email_text(calendar_url: str, tz_url: str, portal_url: str) -> str:
+    return "\n".join(
+        [
+            "Kiitos tilauksestasi – Via Clara Kuurytmi",
+            "",
+            "Tässä henkilökohtainen kalenterilinkkisi:",
+            calendar_url,
+            "",
+            "Lisää kalenteriin näin:",
+            "Google Kalenteri: Asetukset -> Lisää kalenteri -> URL-osoitteesta -> liitä linkki",
+            "Apple Calendar: File -> New Calendar Subscription -> liitä linkki",
+            "Outlook: Add calendar -> Subscribe from web -> liitä linkki",
+            "",
+            "Vaihda aikavyöhyke:",
+            tz_url,
+            "",
+            "Hallitse tilaustasi:",
+            portal_url,
+            "",
+            "Tallenna tämä viesti, koska kalenterilinkki on henkilökohtainen.",
+            "",
+            "Via Clara",
+        ]
+    )
+
+
+def send_calendar_email(to_email: str, calendar_url: str, tz_url: str, portal_url: str):
+    if not RESEND_API_KEY:
+        logger.warning("RESEND_API_KEY puuttuu, sähköpostia ei lähetetty.")
+        return None
+
+    params = {
+        "from": EMAIL_FROM,
+        "to": [to_email],
+        "subject": "Via Clara Kuurytmi – henkilökohtainen kalenterilinkkisi",
+        "html": build_calendar_email_html(calendar_url, tz_url, portal_url),
+        "text": build_calendar_email_text(calendar_url, tz_url, portal_url),
+    }
+
+    return resend.Emails.send(params)
+
+
+# -------------------------
 # Database helpers
 # -------------------------
 def get_connection():
@@ -294,6 +392,8 @@ def init_db():
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;")
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();")
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS timezone TEXT;")
+    cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS customer_email TEXT;")
+    cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS welcome_email_sent_at TIMESTAMP NULL;")
 
     conn.commit()
     cur.close()
@@ -308,6 +408,8 @@ def ensure_tokens_schema():
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;")
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();")
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS timezone TEXT;")
+    cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS customer_email TEXT;")
+    cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS welcome_email_sent_at TIMESTAMP NULL;")
     conn.commit()
     cur.close()
     conn.close()
@@ -366,7 +468,7 @@ def debug_token(token: str):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "SELECT active, stripe_session_id, stripe_subscription_id, stripe_customer_id, created_at, timezone "
+        "SELECT active, stripe_session_id, stripe_subscription_id, stripe_customer_id, created_at, timezone, customer_email, welcome_email_sent_at "
         "FROM tokens WHERE token = %s",
         (token,),
     )
@@ -377,7 +479,7 @@ def debug_token(token: str):
     if not row:
         raise HTTPException(status_code=404, detail="token not found")
 
-    active, sess_id, sub_id, customer_id, created_at, tz = row
+    active, sess_id, sub_id, customer_id, created_at, tz, customer_email, welcome_email_sent_at = row
     return {
         "token": token,
         "active": active,
@@ -386,6 +488,8 @@ def debug_token(token: str):
         "stripe_customer_id": customer_id,
         "created_at": str(created_at),
         "timezone": tz or DEFAULT_TIMEZONE,
+        "customer_email": customer_email,
+        "welcome_email_sent_at": str(welcome_email_sent_at) if welcome_email_sent_at else None,
     }
 
 
@@ -435,6 +539,7 @@ def buy_yearly():
 @app.get("/success", response_class=HTMLResponse)
 def success(session_id: str):
     ensure_tokens_schema()
+
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id is required")
 
@@ -443,39 +548,64 @@ def success(session_id: str):
         subscription = session.get("subscription")
         subscription_id = subscription.get("id") if isinstance(subscription, dict) else subscription
         customer_id = session.get("customer")
+
+        customer_details = session.get("customer_details") or {}
+        customer_email = customer_details.get("email") or session.get("customer_email")
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid session_id")
 
-    token = secrets.token_urlsafe(16)
-
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT token FROM tokens WHERE stripe_session_id = %s", (session_id,))
+
+    cur.execute(
+        """
+        SELECT token, welcome_email_sent_at, customer_email
+        FROM tokens
+        WHERE stripe_session_id = %s
+        """,
+        (session_id,),
+    )
     row = cur.fetchone()
 
     if row:
         token = row[0]
+        welcome_email_sent_at = row[1]
+        existing_customer_email = row[2]
+
         cur.execute(
             """
             UPDATE tokens
             SET stripe_subscription_id = COALESCE(stripe_subscription_id, %s),
-                stripe_customer_id = COALESCE(stripe_customer_id, %s)
+                stripe_customer_id = COALESCE(stripe_customer_id, %s),
+                customer_email = COALESCE(customer_email, %s)
             WHERE stripe_session_id = %s
             """,
-            (subscription_id, customer_id, session_id),
+            (subscription_id, customer_id, customer_email, session_id),
         )
         conn.commit()
+
+        if not customer_email:
+            customer_email = existing_customer_email
     else:
+        token = secrets.token_urlsafe(16)
+
         cur.execute(
             """
             INSERT INTO tokens (
-                token, active, stripe_session_id, stripe_subscription_id, stripe_customer_id, timezone
+                token,
+                active,
+                stripe_session_id,
+                stripe_subscription_id,
+                stripe_customer_id,
+                timezone,
+                customer_email
             )
-            VALUES (%s, TRUE, %s, %s, %s, %s)
+            VALUES (%s, TRUE, %s, %s, %s, %s, %s)
             """,
-            (token, session_id, subscription_id, customer_id, DEFAULT_TIMEZONE),
+            (token, session_id, subscription_id, customer_id, DEFAULT_TIMEZONE, customer_email),
         )
         conn.commit()
+        welcome_email_sent_at = None
 
     cur.close()
     conn.close()
@@ -483,6 +613,31 @@ def success(session_id: str):
     cal_url = f"{BASE_URL}/calendar/{token}.ics"
     tz_url = f"{BASE_URL}/tz?token={token}"
     portal_url = f"{BASE_URL}/customer-portal?token={token}"
+
+    if customer_email and not welcome_email_sent_at:
+        try:
+            send_calendar_email(
+                to_email=customer_email,
+                calendar_url=cal_url,
+                tz_url=tz_url,
+                portal_url=portal_url,
+            )
+
+            conn = get_connection()
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE tokens
+                SET welcome_email_sent_at = NOW()
+                WHERE stripe_session_id = %s
+                """,
+                (session_id,),
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception:
+            logger.exception("Kalenterisähköpostin lähetys epäonnistui")
 
     return HTMLResponse(
         f"""
@@ -528,6 +683,8 @@ def success(session_id: str):
         <p><b>Outlook:</b> Add calendar → Subscribe from web → liitä linkki</p>
 
         <p><a href="{tz_url}">Vaihda aikavyöhyke</a></p>
+
+        <p>Sähköposti kalenterilinkillä on lähetetty, jos Stripe palautti sähköpostiosoitteen.</p>
 
         <script>
         async function copyCalendarLink() {{
@@ -739,10 +896,6 @@ async def stripe_webhook(request: Request):
         status = sub.get("status")
 
         if sub_id:
-            # Tärkeä logiikka:
-            # - cancel_at_period_end saa jäädä aktiiviseksi nykyisen kauden loppuun asti
-            # - payment_failed ei saa sulkea käyttöä heti
-            # Suljetaan käyttö vain jos tilaus on oikeasti päättynyt / menetetty.
             if status in ("canceled", "unpaid", "incomplete_expired"):
                 set_token_active_by_subscription_id(sub_id, False)
             elif status in ("active", "trialing", "past_due", "incomplete"):
@@ -759,7 +912,6 @@ async def stripe_webhook(request: Request):
             set_token_active_by_subscription_id(sub_id, True)
 
     elif event_type == "invoice.payment_failed":
-        # Ei suljeta käyttöä heti epäonnistuneesta maksusta.
         pass
 
     return {"ok": True}
