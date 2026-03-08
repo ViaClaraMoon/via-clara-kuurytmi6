@@ -80,7 +80,7 @@ ZODIAC_SIGNS = [
 
 def plant_emoji_from_element(element_emoji: str) -> str:
     if element_emoji == "💧":
-        return "🥬"
+        return "🌿"
     if element_emoji == "🌍":
         return "🥕"
     if element_emoji == "🌬":
