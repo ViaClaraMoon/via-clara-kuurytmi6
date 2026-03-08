@@ -193,7 +193,7 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
         phase_by_date[local_day] = {
             "emoji": "🌚" if pid == 0 else "🌕",
             "time": fmt_hhmm(dt_local),
-            "arrow": "⬇️" if pid == 0 else "⬆️",
+            "arrow": "⬆️" if pid == 0 else "⬇️",
         }
 
     ingress_by_date = {}
