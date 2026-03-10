@@ -44,6 +44,108 @@ if RESEND_API_KEY:
     resend.api_key = RESEND_API_KEY
 
 # -------------------------
+# Language helpers
+# -------------------------
+SUPPORTED_LANGS = {"fi", "en"}
+
+
+def normalize_lang(lang: str | None) -> str:
+    if not lang:
+        return "fi"
+    lang = str(lang).strip().lower()
+    return "en" if lang == "en" else "fi"
+
+
+TEXTS = {
+    "fi": {
+        "product_name": "Via Clara Kuurytmi",
+        "calendar_name": "Via Clara – Kuurytmi",
+        "calendar_filename_prefix": "kuurytmi",
+        "email_subject": "Via Clara Kuurytmi – henkilökohtainen kalenterilinkkisi",
+        "email_h2": "Kiitos tilauksestasi – Via Clara Kuurytmi",
+        "email_intro": "Tässä henkilökohtainen kalenterilinkkisi:",
+        "email_add_title": "Lisää kalenteriin näin:",
+        "email_google": "Google Kalenteri: Asetukset → Lisää kalenteri → URL-osoitteesta → liitä linkki",
+        "email_apple": "Apple Calendar: File → New Calendar Subscription → liitä linkki",
+        "email_outlook": "Outlook: Add calendar → Subscribe from web → liitä linkki",
+        "email_timezone": "Vaihda aikavyöhyke:",
+        "email_portal": "Hallitse tilaustasi:",
+        "email_save_message": "Tallenna tämä viesti, koska kalenterilinkki on henkilökohtainen.",
+        "email_signature": "Lämpimin terveisin,<br>Via Clara",
+        "success_title": "Kiitos! Tilauksesi on käsitelty ✅",
+        "success_link_title": "Henkilökohtainen kalenterilinkkisi:",
+        "success_copy_button": "Kopioi kalenterilinkki",
+        "success_manage_button": "Hallitse tilaustani",
+        "success_copy_ok": "Kalenterilinkki kopioitu ✅",
+        "success_copy_help": "Kopioi tämä linkki ja lisää se omaan kalenteriisi URL-osoitteena. Tämä on henkilökohtainen kalenterisyötteesi.",
+        "success_google": "Google Kalenteri: Asetukset → Lisää kalenteri → URL-osoitteesta → liitä linkki",
+        "success_apple": "Apple Calendar: File → New Calendar Subscription → liitä linkki",
+        "success_outlook": "Outlook: Add calendar → Subscribe from web → liitä linkki",
+        "success_tz_link": "Vaihda aikavyöhyke",
+        "success_email_notice": "Sähköposti kalenterilinkillä on lähetetty, jos Stripe palautti sähköpostiosoitteen.",
+        "tz_title": "Aikavyöhyke",
+        "tz_label": "Valitse aikavyöhyke:",
+        "tz_save": "Tallenna",
+        "tz_note": "Huom: Google Calendar voi päivittää URL-kalenterin viiveellä.",
+        "tz_saved_title": "Tallennettu ✅",
+        "tz_saved_label": "Aikavyöhyke:",
+        "tz_saved_link_title": "Kalenterilinkki:",
+        "cancel_title": "Peruit maksun.",
+        "cancel_text": "Voit yrittää uudelleen milloin vain.",
+        "home_title": "Via Clara – Kuurytmi",
+        "home_monthly": "Tilaa kuukausittain (3,99€/kk)",
+        "home_yearly": "Tilaa vuodeksi (34,90€/vuosi)",
+        "portal_return_url": "https://www.viaclara.fi/kuurytmi/",
+    },
+    "en": {
+        "product_name": "Via Clara Moon Calendar",
+        "calendar_name": "Via Clara – Moon Calendar",
+        "calendar_filename_prefix": "moon-calendar",
+        "email_subject": "Your Moon Calendar is ready 🌙",
+        "email_h2": "Thank you for your order – Via Clara Moon Calendar",
+        "email_intro": "Here is your personal calendar link:",
+        "email_add_title": "Add it to your calendar like this:",
+        "email_google": "Google Calendar: Settings → Add calendar → From URL → paste the link",
+        "email_apple": "Apple Calendar: File → New Calendar Subscription → paste the link",
+        "email_outlook": "Outlook: Add calendar → Subscribe from web → paste the link",
+        "email_timezone": "Change timezone:",
+        "email_portal": "Manage your subscription:",
+        "email_save_message": "Save this message, because the calendar link is personal.",
+        "email_signature": "Warm regards,<br>Via Clara",
+        "success_title": "Thank you! Your order has been processed ✅",
+        "success_link_title": "Your personal calendar link:",
+        "success_copy_button": "Copy calendar link",
+        "success_manage_button": "Manage my subscription",
+        "success_copy_ok": "Calendar link copied ✅",
+        "success_copy_help": "Copy this link and add it to your calendar as a subscription URL. This is your personal calendar feed.",
+        "success_google": "Google Calendar: Settings → Add calendar → From URL → paste the link",
+        "success_apple": "Apple Calendar: File → New Calendar Subscription → paste the link",
+        "success_outlook": "Outlook: Add calendar → Subscribe from web → paste the link",
+        "success_tz_link": "Change timezone",
+        "success_email_notice": "An email with your calendar link has been sent if Stripe returned your email address.",
+        "tz_title": "Timezone",
+        "tz_label": "Choose timezone:",
+        "tz_save": "Save",
+        "tz_note": "Note: Google Calendar may update subscribed calendars with a delay.",
+        "tz_saved_title": "Saved ✅",
+        "tz_saved_label": "Timezone:",
+        "tz_saved_link_title": "Calendar link:",
+        "cancel_title": "Payment was cancelled.",
+        "cancel_text": "You can try again anytime.",
+        "home_title": "Via Clara – Moon Calendar",
+        "home_monthly": "Subscribe monthly (€3.99/month)",
+        "home_yearly": "Subscribe yearly (€34.90/year)",
+        "portal_return_url": "https://www.viaclara.fi/moon-calendar/",
+    },
+}
+
+
+def t(lang: str, key: str) -> str:
+    lang = normalize_lang(lang)
+    return TEXTS.get(lang, TEXTS["fi"]).get(key, TEXTS["fi"][key])
+
+
+# -------------------------
 # Skyfield preload (cache in /tmp)
 # -------------------------
 SKYFIELD_DIR = os.getenv("SKYFIELD_DIR", "/tmp/skyfield")
@@ -95,8 +197,8 @@ def fmt_hhmm(dt_local: datetime) -> str:
 
 
 def moon_sign_index_at(eph, ts, dt_utc: datetime) -> int:
-    t = ts.from_datetime(dt_utc)
-    astrometric = eph["earth"].at(t).observe(eph["moon"]).apparent()
+    t_sky = ts.from_datetime(dt_utc)
+    astrometric = eph["earth"].at(t_sky).observe(eph["moon"]).apparent()
     lon = astrometric.ecliptic_latlon()[1]
     deg = lon.degrees % 360.0
     return int(deg // 30)
@@ -108,8 +210,8 @@ def sign_parts_from_index(idx: int):
     return sign_emoji, element_emoji, plant_emoji
 
 
-def get_cached_ics(token: str, tz_name: str):
-    key = f"{token}|{tz_name}"
+def get_cached_ics(token: str, tz_name: str, lang: str):
+    key = f"{token}|{tz_name}|{lang}"
     item = ICS_CACHE.get(key)
     if not item:
         return None
@@ -122,8 +224,8 @@ def get_cached_ics(token: str, tz_name: str):
     return item["content"]
 
 
-def set_cached_ics(token: str, tz_name: str, content: bytes):
-    key = f"{token}|{tz_name}"
+def set_cached_ics(token: str, tz_name: str, lang: str, content: bytes):
+    key = f"{token}|{tz_name}|{lang}"
     ICS_CACHE[key] = {
         "created_at": time.time(),
         "content": content,
@@ -148,7 +250,9 @@ def set_token_active_by_subscription_id(subscription_id: str, is_active: bool):
     conn.close()
 
 
-def build_ics_for_token(token: str, tz_name: str) -> bytes:
+def build_ics_for_token(token: str, tz_name: str, lang: str = "fi") -> bytes:
+    lang = normalize_lang(lang)
+
     try:
         tz = ZoneInfo(tz_name)
     except Exception:
@@ -175,10 +279,10 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
     t1 = ts.from_datetime(search_end_utc)
 
     cal = Calendar()
-    cal.add("prodid", "-//Via Clara//Kuurytmi Backend//FI")
+    cal.add("prodid", "-//Via Clara//Moon Rhythm Backend//FI-EN")
     cal.add("version", "2.0")
     cal.add("calscale", "GREGORIAN")
-    cal.add("x-wr-calname", "Via Clara – Kuurytmi")
+    cal.add("x-wr-calname", t(lang, "calendar_name"))
     cal.add("x-wr-timezone", tz_name)
 
     valid_dates = {today_local + timedelta(days=i) for i in range(-days_past, days_ahead)}
@@ -188,12 +292,12 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
     phase_func = almanac.moon_phases(eph)
     phase_times, phase_ids = almanac.find_discrete(t0, t1, phase_func)
 
-    for t, pid in zip(phase_times, phase_ids):
+    for phase_time, pid in zip(phase_times, phase_ids):
         pid = int(pid)
         if pid not in (0, 2):
             continue
 
-        dt_utc = t.utc_datetime().replace(tzinfo=timezone.utc)
+        dt_utc = phase_time.utc_datetime().replace(tzinfo=timezone.utc)
         dt_local = dt_utc.astimezone(tz)
         local_day = dt_local.date()
 
@@ -218,8 +322,8 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
 
     ingress_times, ingress_idxs = almanac.find_discrete(t0, t1, moon_sign_index_vector)
 
-    for t, idx in zip(ingress_times, ingress_idxs):
-        dt_utc = t.utc_datetime().replace(tzinfo=timezone.utc)
+    for ingress_time, idx in zip(ingress_times, ingress_idxs):
+        dt_utc = ingress_time.utc_datetime().replace(tzinfo=timezone.utc)
         dt_local = dt_utc.astimezone(tz)
         local_day = dt_local.date()
 
@@ -279,7 +383,9 @@ def build_ics_for_token(token: str, tz_name: str) -> bytes:
 # -------------------------
 # Email helpers
 # -------------------------
-def build_calendar_email_html(calendar_url: str, tz_url: str, portal_url: str) -> str:
+def build_calendar_email_html(calendar_url: str, tz_url: str, portal_url: str, lang: str = "fi") -> str:
+    lang = normalize_lang(lang)
+
     calendar_url_esc = py_html.escape(calendar_url, quote=True)
     tz_url_esc = py_html.escape(tz_url, quote=True)
     portal_url_esc = py_html.escape(portal_url, quote=True)
@@ -287,79 +393,83 @@ def build_calendar_email_html(calendar_url: str, tz_url: str, portal_url: str) -
     return f"""
     <html>
       <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #222;">
-        <h2>Kiitos tilauksestasi – Via Clara Kuurytmi</h2>
+        <h2>{t(lang, "email_h2")}</h2>
 
-        <p>Tässä henkilökohtainen kalenterilinkkisi:</p>
+        <p>{t(lang, "email_intro")}</p>
 
         <p>
           <a href="{calendar_url_esc}">{calendar_url_esc}</a>
         </p>
 
-        <p><strong>Lisää kalenteriin näin:</strong></p>
+        <p><strong>{t(lang, "email_add_title")}</strong></p>
 
         <ul>
-          <li><strong>Google Kalenteri:</strong> Asetukset → Lisää kalenteri → URL-osoitteesta → liitä linkki</li>
-          <li><strong>Apple Calendar:</strong> File → New Calendar Subscription → liitä linkki</li>
-          <li><strong>Outlook:</strong> Add calendar → Subscribe from web → liitä linkki</li>
+          <li><strong>Google Calendar:</strong> {t(lang, "email_google").replace("Google Calendar: ", "").replace("Google Kalenteri: ", "")}</li>
+          <li><strong>Apple Calendar:</strong> {t(lang, "email_apple").replace("Apple Calendar: ", "")}</li>
+          <li><strong>Outlook:</strong> {t(lang, "email_outlook").replace("Outlook: ", "")}</li>
         </ul>
 
         <p>
-          <strong>Vaihda aikavyöhyke:</strong><br>
+          <strong>{t(lang, "email_timezone")}</strong><br>
           <a href="{tz_url_esc}">{tz_url_esc}</a>
         </p>
 
         <p>
-          <strong>Hallitse tilaustasi:</strong><br>
+          <strong>{t(lang, "email_portal")}</strong><br>
           <a href="{portal_url_esc}">{portal_url_esc}</a>
         </p>
 
         <p>
-          Tallenna tämä viesti, koska kalenterilinkki on henkilökohtainen.
+          {t(lang, "email_save_message")}
         </p>
 
-        <p>Lämpimin terveisin,<br>Via Clara</p>
+        <p>{t(lang, "email_signature")}</p>
       </body>
     </html>
     """
 
 
-def build_calendar_email_text(calendar_url: str, tz_url: str, portal_url: str) -> str:
+def build_calendar_email_text(calendar_url: str, tz_url: str, portal_url: str, lang: str = "fi") -> str:
+    lang = normalize_lang(lang)
+
     return "\n".join(
         [
-            "Kiitos tilauksestasi – Via Clara Kuurytmi",
+            t(lang, "email_h2").replace(" – ", " - "),
             "",
-            "Tässä henkilökohtainen kalenterilinkkisi:",
+            t(lang, "email_intro"),
             calendar_url,
             "",
-            "Lisää kalenteriin näin:",
-            "Google Kalenteri: Asetukset -> Lisää kalenteri -> URL-osoitteesta -> liitä linkki",
-            "Apple Calendar: File -> New Calendar Subscription -> liitä linkki",
-            "Outlook: Add calendar -> Subscribe from web -> liitä linkki",
+            t(lang, "email_add_title"),
+            t(lang, "email_google"),
+            t(lang, "email_apple"),
+            t(lang, "email_outlook"),
             "",
-            "Vaihda aikavyöhyke:",
+            t(lang, "email_timezone"),
             tz_url,
             "",
-            "Hallitse tilaustasi:",
+            t(lang, "email_portal"),
             portal_url,
             "",
-            "Tallenna tämä viesti, koska kalenterilinkki on henkilökohtainen.",
+            t(lang, "email_save_message"),
             "",
             "Via Clara",
         ]
     )
 
 
-def send_calendar_email(to_email: str, calendar_url: str, tz_url: str, portal_url: str):
+def send_calendar_email(to_email: str, calendar_url: str, tz_url: str, portal_url: str, lang: str = "fi"):
     if not RESEND_API_KEY:
         logger.warning("RESEND_API_KEY puuttuu, sähköpostia ei lähetetty.")
         return None
 
+    lang = normalize_lang(lang)
+
     params = {
         "from": EMAIL_FROM,
         "to": [to_email],
-        "subject": "Via Clara Kuurytmi – henkilökohtainen kalenterilinkkisi",
-        "html": build_calendar_email_html(calendar_url, tz_url, portal_url),
-        "text": build_calendar_email_text(calendar_url, tz_url, portal_url),
+        "subject": t(lang, "email_subject"),
+        "html": build_calendar_email_html(calendar_url, tz_url, portal_url, lang=lang),
+        "text": build_calendar_email_text(calendar_url, tz_url, portal_url, lang=lang),
     }
 
     return resend.Emails.send(params)
@@ -395,6 +505,7 @@ def init_db():
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS timezone TEXT;")
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS customer_email TEXT;")
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS welcome_email_sent_at TIMESTAMP NULL;")
+    cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS language TEXT DEFAULT 'fi';")
 
     conn.commit()
     cur.close()
@@ -411,6 +522,7 @@ def ensure_tokens_schema():
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS timezone TEXT;")
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS customer_email TEXT;")
     cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS welcome_email_sent_at TIMESTAMP NULL;")
+    cur.execute("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS language TEXT DEFAULT 'fi';")
     conn.commit()
     cur.close()
     conn.close()
@@ -427,6 +539,19 @@ def get_token_timezone(token: str) -> str:
     if not row or not row[0]:
         return DEFAULT_TIMEZONE
     return row[0]
+
+
+def get_token_language(token: str) -> str:
+    ensure_tokens_schema()
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT language FROM tokens WHERE token = %s", (token,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    if not row or not row[0]:
+        return "fi"
+    return normalize_lang(row[0])
 
 
 def set_token_timezone(token: str, tz: str):
@@ -469,7 +594,7 @@ def debug_token(token: str):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "SELECT active, stripe_session_id, stripe_subscription_id, stripe_customer_id, created_at, timezone, customer_email, welcome_email_sent_at "
+        "SELECT active, stripe_session_id, stripe_subscription_id, stripe_customer_id, created_at, timezone, customer_email, welcome_email_sent_at, language "
         "FROM tokens WHERE token = %s",
         (token,),
     )
@@ -480,7 +605,7 @@ def debug_token(token: str):
     if not row:
         raise HTTPException(status_code=404, detail="token not found")
 
-    active, sess_id, sub_id, customer_id, created_at, tz, customer_email, welcome_email_sent_at = row
+    active, sess_id, sub_id, customer_id, created_at, tz, customer_email, welcome_email_sent_at, language = row
     return {
         "token": token,
         "active": active,
@@ -491,48 +616,63 @@ def debug_token(token: str):
         "timezone": tz or DEFAULT_TIMEZONE,
         "customer_email": customer_email,
         "welcome_email_sent_at": str(welcome_email_sent_at) if welcome_email_sent_at else None,
+        "language": normalize_lang(language),
     }
 
 
 @app.get("/", response_class=HTMLResponse)
 def home():
-    return """
-    <h2>Via Clara – Kuurytmi</h2>
-    <p><a href="/buy-monthly">Tilaa kuukausittain (3,99€/kk)</a></p>
-    <p><a href="/buy-yearly">Tilaa vuodeksi (34,90€/vuosi)</a></p>
+    return f"""
+    <h2>{t("fi", "home_title")}</h2>
+    <p><a href="/buy-monthly">{t("fi", "home_monthly")}</a></p>
+    <p><a href="/buy-yearly">{t("fi", "home_yearly")}</a></p>
+    <hr>
+    <h2>{t("en", "home_title")}</h2>
+    <p><a href="/buy-monthly?lang=en">{t("en", "home_monthly")}</a></p>
+    <p><a href="/buy-yearly?lang=en">{t("en", "home_yearly")}</a></p>
     """
 
 
 @app.get("/buy-monthly")
-def buy_monthly():
+def buy_monthly(lang: str = "fi"):
+    lang = normalize_lang(lang)
+
     if not STRIPE_SECRET_KEY:
         raise HTTPException(status_code=500, detail="STRIPE_SECRET_KEY is not set")
     if not STRIPE_PRICE_ID_MONTHLY:
         raise HTTPException(status_code=500, detail="STRIPE_PRICE_ID_MONTHLY is not set")
 
+    cancel_url = f"{BASE_URL}/cancel?lang={lang}"
+
     session = stripe.checkout.Session.create(
         mode="subscription",
         line_items=[{"price": STRIPE_PRICE_ID_MONTHLY, "quantity": 1}],
         success_url=f"{BASE_URL}/success?session_id={{CHECKOUT_SESSION_ID}}",
-        cancel_url=f"{BASE_URL}/cancel",
+        cancel_url=cancel_url,
         allow_promotion_codes=True,
+        metadata={"language": lang, "plan": "monthly"},
     )
     return RedirectResponse(session.url, status_code=303)
 
 
 @app.get("/buy-yearly")
-def buy_yearly():
+def buy_yearly(lang: str = "fi"):
+    lang = normalize_lang(lang)
+
     if not STRIPE_SECRET_KEY:
         raise HTTPException(status_code=500, detail="STRIPE_SECRET_KEY is not set")
     if not STRIPE_PRICE_ID_YEARLY:
         raise HTTPException(status_code=500, detail="STRIPE_PRICE_ID_YEARLY is not set")
 
+    cancel_url = f"{BASE_URL}/cancel?lang={lang}"
+
     session = stripe.checkout.Session.create(
         mode="subscription",
         line_items=[{"price": STRIPE_PRICE_ID_YEARLY, "quantity": 1}],
         success_url=f"{BASE_URL}/success?session_id={{CHECKOUT_SESSION_ID}}",
-        cancel_url=f"{BASE_URL}/cancel",
+        cancel_url=cancel_url,
         allow_promotion_codes=True,
+        metadata={"language": lang, "plan": "yearly"},
     )
     return RedirectResponse(session.url, status_code=303)
 
@@ -552,6 +692,9 @@ def success(session_id: str):
 
         customer_details = session.get("customer_details") or {}
         customer_email = customer_details.get("email") or session.get("customer_email")
+
+        metadata = session.get("metadata") or {}
+        lang = normalize_lang(metadata.get("language", "fi"))
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid session_id")
 
@@ -560,7 +703,7 @@ def success(session_id: str):
 
     cur.execute(
         """
-        SELECT token, welcome_email_sent_at, customer_email
+        SELECT token, welcome_email_sent_at, customer_email, language
         FROM tokens
         WHERE stripe_session_id = %s
         """,
@@ -572,21 +715,24 @@ def success(session_id: str):
         token = row[0]
         welcome_email_sent_at = row[1]
         existing_customer_email = row[2]
+        existing_language = normalize_lang(row[3] or "fi")
 
         cur.execute(
             """
             UPDATE tokens
             SET stripe_subscription_id = COALESCE(stripe_subscription_id, %s),
                 stripe_customer_id = COALESCE(stripe_customer_id, %s),
-                customer_email = COALESCE(customer_email, %s)
+                customer_email = COALESCE(customer_email, %s),
+                language = COALESCE(language, %s)
             WHERE stripe_session_id = %s
             """,
-            (subscription_id, customer_id, customer_email, session_id),
+            (subscription_id, customer_id, customer_email, lang, session_id),
         )
         conn.commit()
 
         if not customer_email:
             customer_email = existing_customer_email
+        lang = existing_language or lang
     else:
         token = secrets.token_urlsafe(16)
 
@@ -599,11 +745,12 @@ def success(session_id: str):
                 stripe_subscription_id,
                 stripe_customer_id,
                 timezone,
-                customer_email
+                customer_email,
+                language
             )
-            VALUES (%s, TRUE, %s, %s, %s, %s, %s)
+            VALUES (%s, TRUE, %s, %s, %s, %s, %s, %s)
             """,
-            (token, session_id, subscription_id, customer_id, DEFAULT_TIMEZONE, customer_email),
+            (token, session_id, subscription_id, customer_id, DEFAULT_TIMEZONE, customer_email, lang),
         )
         conn.commit()
         welcome_email_sent_at = None
@@ -622,6 +769,7 @@ def success(session_id: str):
                 calendar_url=cal_url,
                 tz_url=tz_url,
                 portal_url=portal_url,
+                lang=lang,
             )
 
             conn = get_connection()
@@ -640,11 +788,23 @@ def success(session_id: str):
         except Exception:
             logger.exception("Kalenterisähköpostin lähetys epäonnistui")
 
+    success_title = t(lang, "success_title")
+    success_link_title = t(lang, "success_link_title")
+    success_copy_button = t(lang, "success_copy_button")
+    success_manage_button = t(lang, "success_manage_button")
+    success_copy_ok = t(lang, "success_copy_ok")
+    success_copy_help = t(lang, "success_copy_help")
+    success_google = t(lang, "success_google")
+    success_apple = t(lang, "success_apple")
+    success_outlook = t(lang, "success_outlook")
+    success_tz_link = t(lang, "success_tz_link")
+    success_email_notice = t(lang, "success_email_notice")
+
     return HTMLResponse(
         f"""
-        <h2>Kiitos! Tilauksesi on käsitelty ✅</h2>
+        <h2>{success_title}</h2>
 
-        <p><b>Henkilökohtainen kalenterilinkkisi:</b></p>
+        <p><b>{success_link_title}</b></p>
 
         <p>
             <input
@@ -661,31 +821,30 @@ def success(session_id: str):
                 onclick="copyCalendarLink()"
                 style="padding:10px 14px;font-size:14px;cursor:pointer;margin-right:8px;"
             >
-                Kopioi kalenterilinkki
+                {success_copy_button}
             </button>
 
             <a
                 href="{portal_url}"
                 style="display:inline-block;padding:10px 14px;font-size:14px;text-decoration:none;border:1px solid #ccc;"
             >
-                Hallitse tilaustani
+                {success_manage_button}
             </a>
         </p>
 
         <p id="copy-status" style="font-weight:bold;"></p>
 
         <p>
-            Kopioi tämä linkki ja lisää se omaan kalenteriisi URL-osoitteena.
-            Tämä on henkilökohtainen kalenterisyötteesi.
+            {success_copy_help}
         </p>
 
-        <p><b>Google Kalenteri:</b> Asetukset → Lisää kalenteri → URL-osoitteesta → liitä linkki</p>
-        <p><b>Apple Calendar:</b> File → New Calendar Subscription → liitä linkki</p>
-        <p><b>Outlook:</b> Add calendar → Subscribe from web → liitä linkki</p>
+        <p><b>Google Calendar:</b> {success_google.replace("Google Calendar: ", "").replace("Google Kalenteri: ", "")}</p>
+        <p><b>Apple Calendar:</b> {success_apple.replace("Apple Calendar: ", "")}</p>
+        <p><b>Outlook:</b> {success_outlook.replace("Outlook: ", "")}</p>
 
-        <p><a href="{tz_url}">Vaihda aikavyöhyke</a></p>
+        <p><a href="{tz_url}">{success_tz_link}</a></p>
 
-        <p>Sähköposti kalenterilinkillä on lähetetty, jos Stripe palautti sähköpostiosoitteen.</p>
+        <p>{success_email_notice}</p>
 
         <script>
         async function copyCalendarLink() {{
@@ -694,12 +853,12 @@ def success(session_id: str):
 
             try {{
                 await navigator.clipboard.writeText(input.value);
-                status.textContent = "Kalenterilinkki kopioitu ✅";
+                status.textContent = "{success_copy_ok}";
             }} catch (err) {{
                 input.select();
                 input.setSelectionRange(0, 99999);
                 document.execCommand("copy");
-                status.textContent = "Kalenterilinkki kopioitu ✅";
+                status.textContent = "{success_copy_ok}";
             }}
         }}
         </script>
@@ -714,7 +873,7 @@ def customer_portal(token: str):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "SELECT stripe_customer_id FROM tokens WHERE token = %s",
+        "SELECT stripe_customer_id, language FROM tokens WHERE token = %s",
         (token,),
     )
     row = cur.fetchone()
@@ -724,9 +883,12 @@ def customer_portal(token: str):
     if not row or not row[0]:
         raise HTTPException(status_code=404, detail="Customer not found")
 
+    stripe_customer_id, language = row
+    lang = normalize_lang(language)
+
     portal_session = stripe.billing_portal.Session.create(
-        customer=row[0],
-        return_url=f"{BASE_URL}/",
+        customer=stripe_customer_id,
+        return_url=t(lang, "portal_return_url"),
     )
 
     return RedirectResponse(portal_session.url, status_code=303)
@@ -738,7 +900,7 @@ def tz_form(token: str):
 
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT timezone FROM tokens WHERE token = %s", (token,))
+    cur.execute("SELECT timezone, language FROM tokens WHERE token = %s", (token,))
     row = cur.fetchone()
     cur.close()
     conn.close()
@@ -747,6 +909,7 @@ def tz_form(token: str):
         raise HTTPException(status_code=404, detail="Not found")
 
     current_tz = row[0] or DEFAULT_TIMEZONE
+    lang = normalize_lang(row[1] or "fi")
 
     options = [
         "Europe/Helsinki",
@@ -765,19 +928,19 @@ def tz_form(token: str):
 
     return HTMLResponse(
         f"""
-        <h2>Aikavyöhyke</h2>
+        <h2>{t(lang, "tz_title")}</h2>
         <p>Token: <code>{token}</code></p>
         <form method="post" action="/tz">
             <input type="hidden" name="token" value="{token}" />
-            <label for="timezone">Valitse aikavyöhyke:</label><br/>
+            <label for="timezone">{t(lang, "tz_label")}</label><br/>
             <select id="timezone" name="timezone">
                 {option_html}
             </select>
             <p style="margin-top:12px;">
-                <button type="submit">Tallenna</button>
+                <button type="submit">{t(lang, "tz_save")}</button>
             </p>
         </form>
-        <p>Huom: Google Calendar voi päivittää URL-kalenterin viiveellä.</p>
+        <p>{t(lang, "tz_note")}</p>
         """
     )
 
@@ -793,13 +956,15 @@ async def tz_save(request: Request):
 
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT 1 FROM tokens WHERE token = %s", (token,))
-    exists = cur.fetchone()
+    cur.execute("SELECT language FROM tokens WHERE token = %s", (token,))
+    row = cur.fetchone()
     cur.close()
     conn.close()
 
-    if not exists:
+    if not row:
         raise HTTPException(status_code=404, detail="Not found")
+
+    lang = normalize_lang(row[0] or "fi")
 
     set_token_timezone(token, tz)
     invalidate_token_cache(token)
@@ -807,18 +972,19 @@ async def tz_save(request: Request):
     cal_url = f"{BASE_URL}/calendar/{token}.ics"
     return HTMLResponse(
         f"""
-        <h2>Tallennettu ✅</h2>
-        <p>Aikavyöhyke: <b>{tz}</b></p>
-        <p>Kalenterilinkki:</p>
+        <h2>{t(lang, "tz_saved_title")}</h2>
+        <p>{t(lang, "tz_saved_label")} <b>{tz}</b></p>
+        <p>{t(lang, "tz_saved_link_title")}</p>
         <p><a href="{cal_url}">{cal_url}</a></p>
-        <p>Huom: Google Calendar voi päivittää URL-kalenterin viiveellä.</p>
+        <p>{t(lang, "tz_note")}</p>
         """
     )
 
 
 @app.get("/cancel", response_class=HTMLResponse)
-def cancel():
-    return HTMLResponse("<h2>Peruit maksun.</h2><p>Voit yrittää uudelleen milloin vain.</p>")
+def cancel(lang: str = "fi"):
+    lang = normalize_lang(lang)
+    return HTMLResponse(f"<h2>{t(lang, 'cancel_title')}</h2><p>{t(lang, 'cancel_text')}</p>")
 
 
 @app.get("/calendar/{token}.ics")
@@ -827,7 +993,7 @@ def calendar_ics(token: str):
 
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT active FROM tokens WHERE token = %s", (token,))
+    cur.execute("SELECT active, language FROM tokens WHERE token = %s", (token,))
     row = cur.fetchone()
     cur.close()
     conn.close()
@@ -835,34 +1001,37 @@ def calendar_ics(token: str):
     if not row or not row[0]:
         raise HTTPException(status_code=403, detail="Invalid or inactive token")
 
+    lang = normalize_lang(row[1] or "fi")
     tz_name = get_token_timezone(token)
 
-    cached = get_cached_ics(token, tz_name)
+    cached = get_cached_ics(token, tz_name, lang)
     if cached is not None:
+        filename_prefix = t(lang, "calendar_filename_prefix")
         return Response(
             content=cached,
             media_type="text/calendar; charset=utf-8",
             headers={
-                "Content-Disposition": f'inline; filename="kuurytmi-{token}.ics"',
+                "Content-Disposition": f'inline; filename="{filename_prefix}-{token}.ics"',
                 "Cache-Control": "public, max-age=3600",
                 "X-Cache": "HIT",
             },
         )
 
     try:
-        ics_bytes = build_ics_for_token(token, tz_name)
-        set_cached_ics(token, tz_name, ics_bytes)
+        ics_bytes = build_ics_for_token(token, tz_name, lang=lang)
+        set_cached_ics(token, tz_name, lang, ics_bytes)
     except Exception as e:
         import traceback
         print("ICS generation failed:", repr(e))
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail="ICS generation failed")
 
+    filename_prefix = t(lang, "calendar_filename_prefix")
     return Response(
         content=ics_bytes,
         media_type="text/calendar; charset=utf-8",
         headers={
-            "Content-Disposition": f'inline; filename="kuurytmi-{token}.ics"',
+            "Content-Disposition": f'inline; filename="{filename_prefix}-{token}.ics"',
             "Cache-Control": "public, max-age=3600",
             "X-Cache": "MISS",
         },
