@@ -584,6 +584,32 @@ def startup():
 def health():
     return {"ok": True}
 
+@app.get("/create-free-token")
+def create_free_token(secret: str, name: str):
+    if secret != "clara-secret-2026":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    token = name
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        INSERT INTO tokens (token, active, timezone)
+        VALUES (%s, TRUE, %s)
+        """,
+        (token, DEFAULT_TIMEZONE),
+    )
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return {
+        "token": token,
+        "calendar_url": f"{BASE_URL}/calendar/{token}.ics"
+    }
 
 @app.get("/debug/token/{token}")
 def debug_token(token: str):
